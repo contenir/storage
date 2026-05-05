@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Contenir\Storage\Tests\TestAsset;
+namespace Contenir\Storage\Adapter;
 
 use DateTimeImmutable;
 use InvalidArgumentException;

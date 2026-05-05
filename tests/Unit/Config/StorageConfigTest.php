@@ -9,7 +9,7 @@ use Contenir\Storage\Config\StorageConfig;
 use Contenir\Storage\Adapter\CloudflareImages;
 use Contenir\Storage\Adapter\LocalFilesystem;
 use Contenir\Storage\Adapter\S3;
-use Contenir\Storage\Tests\TestAsset\StubImageResizer;
+use Contenir\Storage\Image\StubImageResizer;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 

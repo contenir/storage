@@ -13,7 +13,7 @@ use Contenir\Storage\UploadInput;
 use Contenir\Storage\Variant;
 use Contenir\Storage\VariantFit;
 use Contenir\Storage\VariantRegistry;
-use Contenir\Storage\Tests\TestAsset\InMemoryStorage;
+use Contenir\Storage\Adapter\InMemoryStorage;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;

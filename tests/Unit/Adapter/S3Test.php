@@ -18,7 +18,7 @@ use Contenir\Storage\UploadInput;
 use Contenir\Storage\Variant;
 use Contenir\Storage\VariantFit;
 use Contenir\Storage\VariantRegistry;
-use Contenir\Storage\Tests\TestAsset\StubImageResizer;
+use Contenir\Storage\Image\StubImageResizer;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 

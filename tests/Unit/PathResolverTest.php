@@ -6,7 +6,7 @@ namespace Contenir\Storage\Tests\Unit;
 
 use Contenir\Storage\Exception\WriteException;
 use Contenir\Storage\PathResolver;
-use Contenir\Storage\Tests\TestAsset\StubImageResizer;
+use Contenir\Storage\Image\StubImageResizer;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;

@@ -7,7 +7,7 @@ namespace Contenir\Storage\Tests\Unit;
 use InvalidArgumentException;
 use Contenir\Storage\StorageInterface;
 use Contenir\Storage\StorageManager;
-use Contenir\Storage\Tests\TestAsset\InMemoryStorage;
+use Contenir\Storage\Adapter\InMemoryStorage;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 
