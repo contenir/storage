@@ -1,0 +1,13 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Contenir\Storage\Exception;
+
+final class NotFoundException extends StorageException
+{
+    public static function forPath(string $path): self
+    {
+        return new self(sprintf('Asset "%s" does not exist.', $path));
+    }
+}
