@@ -101,7 +101,25 @@ final class LocalFilesystem implements StorageInterface
         }
 
         $variantRel = $this->variantRelativePath($path, $variant);
-        if (! is_file($this->resolveAbsolutePath($variantRel))) {
+        $variantAbs = $this->resolveAbsolutePath($variantRel);
+
+        // Lazy generation: if the variant hasn't been materialised but the
+        // original is a real image, resize on demand. This covers files that
+        // landed on disk by any route other than store() (legacy data, SCP,
+        // rsync, manual drops). One-time cost per asset; subsequent requests
+        // hit the cached sibling.
+        if (! is_file($variantAbs) && @getimagesize($absolute) !== false) {
+            try {
+                $this->generateVariant($path, $this->variants->get($variant));
+            } catch (\Throwable) {
+                // Resizer failure (corrupt image, missing GD/Imagick, perms,
+                // etc.) — leave the variant unmaterialised and let the caller
+                // fall back to the original URL.
+                return null;
+            }
+        }
+
+        if (! is_file($variantAbs)) {
             return null;
         }
 

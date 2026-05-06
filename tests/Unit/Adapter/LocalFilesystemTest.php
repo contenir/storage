@@ -192,10 +192,77 @@ final class LocalFilesystemTest extends TestCase
 
     public function testUrlReturnsNullWhenVariantMissing(): void
     {
+        // 'x' is not a real image, so getimagesize() returns false and
+        // lazy generation skips it — fall back to the documented null.
         file_put_contents($this->rootPath . '/a.png', 'x');
         $backend = $this->backend(new VariantRegistry(new Variant('admin-thumb', 180, 180)));
 
         self::assertNull($backend->url('a.png', 'admin-thumb'));
+    }
+
+    public function testUrlLazilyMaterialisesVariantWhenOriginalIsImage(): void
+    {
+        // Pre-existing image dropped on disk via SCP/legacy upload — never
+        // went through store(), so no variant materialised. url() should
+        // generate it on demand and return the variant URL.
+        $this->writePngFileAt('uploads/a.png', 50, 30);
+        $backend = $this->backend(new VariantRegistry(new Variant('admin-thumb', 180, 180)));
+
+        $url = $backend->url('uploads/a.png', 'admin-thumb');
+
+        self::assertSame('/uploads/_thumbs/admin-thumb/a.png', $url);
+        self::assertCount(1, $this->resizer->calls, 'resizer should run exactly once');
+        self::assertFileExists(
+            $this->rootPath . '/uploads/_thumbs/admin-thumb/a.png',
+            'variant should be materialised on disk',
+        );
+    }
+
+    public function testUrlReusesPreviouslyMaterialisedVariantWithoutRegenerating(): void
+    {
+        $this->writePngFileAt('uploads/a.png', 50, 30);
+        $backend = $this->backend(new VariantRegistry(new Variant('admin-thumb', 180, 180)));
+
+        $backend->url('uploads/a.png', 'admin-thumb');
+        $backend->url('uploads/a.png', 'admin-thumb');
+        $backend->url('uploads/a.png', 'admin-thumb');
+
+        self::assertCount(
+            1,
+            $this->resizer->calls,
+            'lazy generation should only fire on the first url() call per variant',
+        );
+    }
+
+    public function testUrlReturnsNullWhenLazyGenerationFails(): void
+    {
+        $this->writePngFileAt('uploads/a.png', 10, 10);
+
+        $resizer = new class extends \Contenir\Storage\Image\ImageResizer {
+            public function __construct()
+            {
+                $this->binaryPath = '/dev/null';
+            }
+
+            public function resize(
+                string $sourcePath,
+                string $destPath,
+                int $width,
+                int $height,
+                \Contenir\Storage\VariantFit $fit = \Contenir\Storage\VariantFit::Cover,
+            ): void {
+                throw new \RuntimeException('resizer is on fire');
+            }
+        };
+        $backend = new LocalFilesystem(
+            $this->rootPath,
+            '',
+            new VariantRegistry(new Variant('admin-thumb', 180, 180)),
+            $resizer,
+        );
+
+        // Throw is swallowed — caller falls back to the original URL via null.
+        self::assertNull($backend->url('uploads/a.png', 'admin-thumb'));
     }
 
     public function testUrlThrowsForUnknownVariant(): void
