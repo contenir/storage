@@ -22,6 +22,13 @@ use Contenir\Storage\Exception\WriteException;
 interface StorageInterface
 {
     /**
+     * Canonical variant name for the small-square admin preview. Profiles that
+     * want admin-side previews register a variant under this name; CMS UIs ask
+     * for it via {@see thumbnailUrl()} without hard-coding the string.
+     */
+    public const THUMBNAIL_VARIANT = 'admin-thumb';
+
+    /**
      * Persist an upload at $directory under its (sanitised) client filename.
      *
      * Backends generate any registered variants as part of this call where the
@@ -72,4 +79,15 @@ interface StorageInterface
 
     /** @throws NotFoundException If $path does not exist or is not an image. */
     public function imageMeta(string $path): ImageMeta;
+
+    /**
+     * Convenience for `url($path, self::THUMBNAIL_VARIANT)` that swallows the
+     * "unknown variant" case so CMS UIs can call it on any profile without
+     * caring whether the thumbnail variant is registered.
+     *
+     * Returns null when the profile doesn't declare the thumbnail variant,
+     * when $path doesn't exist, or when the variant hasn't been materialised
+     * for the asset. Callers fall back to whatever URL they have on hand.
+     */
+    public function thumbnailUrl(string $path): ?string;
 }

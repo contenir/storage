@@ -9,6 +9,7 @@ use DirectoryIterator;
 use InvalidArgumentException;
 use Contenir\Storage\Entry;
 use Contenir\Storage\StorageInterface;
+use Contenir\Storage\Thumbnail;
 use Contenir\Storage\Exception\NotFoundException;
 use Contenir\Storage\Exception\WriteException;
 use Contenir\Storage\Exception\InvalidPathException;
@@ -34,6 +35,8 @@ use SplFileInfo;
  */
 final class LocalFilesystem implements StorageInterface
 {
+    use Thumbnail;
+
     private const THUMBS_DIR    = '_thumbs';
     private const HIDDEN_FILES  = ['.DS_Store', 'Thumbs.db'];
     private const COLLISION_MAX = 1000;

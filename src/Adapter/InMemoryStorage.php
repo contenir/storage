@@ -8,6 +8,7 @@ use DateTimeImmutable;
 use InvalidArgumentException;
 use Contenir\Storage\Entry;
 use Contenir\Storage\StorageInterface;
+use Contenir\Storage\Thumbnail;
 use Contenir\Storage\Exception\NotFoundException;
 use Contenir\Storage\Exception\WriteException;
 use Contenir\Storage\ImageMeta;
@@ -28,6 +29,8 @@ use Contenir\Storage\VariantRegistry;
  */
 final class InMemoryStorage implements StorageInterface
 {
+    use Thumbnail;
+
     /** @var array<string, array{isDir: bool, bytes: string, mime: string, mtime: DateTimeImmutable, width?: int, height?: int}> */
     private array $nodes = [];
 

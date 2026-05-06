@@ -41,6 +41,12 @@ $manager->register('default', new LocalFilesystem(
 
 $backend = $manager->get('default');
 $url = $backend->url('logos/site.png', variant: 'admin-thumb');
+
+// Convenience for the canonical admin-thumbnail variant. Returns null
+// when the profile doesn't declare it or the asset hasn't been
+// materialised yet — CMS UIs can call this on any profile and fall back
+// to whatever URL they have on hand.
+$thumb = $backend->thumbnailUrl('logos/site.png');
 ```
 
 See `src/Adapter/` for the full set of adapters and `tests/` for end-to-end

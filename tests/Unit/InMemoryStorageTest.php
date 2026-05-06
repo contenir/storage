@@ -119,6 +119,42 @@ final class InMemoryStorageTest extends TestCase
         $storage->url('a.jpg', 'no-such-variant');
     }
 
+    public function testThumbnailUrlReturnsTheRegisteredAdminThumbVariantUrl(): void
+    {
+        $registry = new VariantRegistry(new Variant('admin-thumb', 180, 180));
+        $storage  = new InMemoryStorage($registry);
+        $storage->putFile('docs/a.jpg', 'bytes', 'image/jpeg');
+
+        self::assertSame(
+            'memory://docs/a.jpg?v=admin-thumb',
+            $storage->thumbnailUrl('docs/a.jpg'),
+        );
+    }
+
+    public function testThumbnailUrlReturnsNullWhenAdminThumbVariantNotRegistered(): void
+    {
+        // No admin-thumb in the registry — convenience swallows the
+        // InvalidArgumentException so callers don't need a try/catch.
+        $registry = new VariantRegistry(new Variant('something-else', 100, 100));
+        $storage  = new InMemoryStorage($registry);
+        $storage->putFile('docs/a.jpg', 'bytes', 'image/jpeg');
+
+        self::assertNull($storage->thumbnailUrl('docs/a.jpg'));
+    }
+
+    public function testThumbnailUrlReturnsNullWhenKeyMissing(): void
+    {
+        $registry = new VariantRegistry(new Variant('admin-thumb', 180, 180));
+        $storage  = new InMemoryStorage($registry);
+
+        self::assertNull($storage->thumbnailUrl('nope.jpg'));
+    }
+
+    public function testThumbnailVariantConstantExposesCanonicalName(): void
+    {
+        self::assertSame('admin-thumb', \Contenir\Storage\StorageInterface::THUMBNAIL_VARIANT);
+    }
+
     public function testListReturnsFilesInDirectory(): void
     {
         $storage = new InMemoryStorage();

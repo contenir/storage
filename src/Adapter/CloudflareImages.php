@@ -7,6 +7,7 @@ namespace Contenir\Storage\Adapter;
 use InvalidArgumentException;
 use Contenir\Storage\Entry;
 use Contenir\Storage\StorageInterface;
+use Contenir\Storage\Thumbnail;
 use Contenir\Storage\ImageMeta;
 use Contenir\Storage\ListOptions;
 use Contenir\Storage\UploadInput;
@@ -34,6 +35,8 @@ use Contenir\Storage\VariantRegistry;
  */
 final class CloudflareImages implements StorageInterface
 {
+    use Thumbnail;
+
     public function __construct(
         private readonly StorageInterface $objectStore,
         private readonly string $deliveryBaseUrl,

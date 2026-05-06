@@ -12,6 +12,7 @@ use League\Flysystem\FilesystemOperator;
 use League\Flysystem\StorageAttributes;
 use Contenir\Storage\Entry;
 use Contenir\Storage\StorageInterface;
+use Contenir\Storage\Thumbnail;
 use Contenir\Storage\Exception\NotFoundException;
 use Contenir\Storage\Exception\WriteException;
 use Contenir\Storage\Image\ImageResizer;
@@ -37,6 +38,8 @@ use Contenir\Storage\VariantRegistry;
  */
 final class S3 implements StorageInterface
 {
+    use Thumbnail;
+
     private const VARIANT_SEPARATOR = '__';
     private const COLLISION_MAX     = 1000;
 
