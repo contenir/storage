@@ -51,7 +51,3 @@ $thumb = $backend->thumbnailUrl('logos/site.png');
 
 See `src/Adapter/` for the full set of adapters and `tests/` for end-to-end
 examples against each.
-
-## License
-
-MIT
