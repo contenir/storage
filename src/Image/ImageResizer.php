@@ -88,7 +88,22 @@ class ImageResizer
 
     private function geometryArgs(int $width, int $height, VariantFit $fit): string
     {
-        $geom = sprintf('%dx%d', $width, $height);
+        if ($width <= 0 && $height <= 0) {
+            throw new \InvalidArgumentException('At least one of width or height must be > 0.');
+        }
+
+        if ($fit !== VariantFit::Contain && ($width <= 0 || $height <= 0)) {
+            throw new \InvalidArgumentException(sprintf(
+                'VariantFit::%s requires both width and height to be > 0.',
+                $fit->name,
+            ));
+        }
+
+        $geom = match (true) {
+            $width > 0 && $height > 0 => sprintf('%dx%d', $width, $height),
+            $width > 0                => sprintf('%dx', $width),
+            default                   => sprintf('x%d', $height),
+        };
 
         return match ($fit) {
             VariantFit::Cover   => sprintf(
