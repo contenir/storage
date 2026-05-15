@@ -51,6 +51,7 @@ class ImageResizer
         int $width,
         int $height,
         VariantFit $fit = VariantFit::Cover,
+        ?int $quality = null,
     ): void {
         if (! is_readable($sourcePath)) {
             throw new WriteException(sprintf('Source image "%s" is not readable.', $sourcePath));
@@ -64,11 +65,15 @@ class ImageResizer
             throw new WriteException(sprintf('Destination directory "%s" is not writable.', $destDir));
         }
 
+        // `-background none` preserves alpha for source PNGs/AVIFs; `$quality`
+        // is consumed by the encoder driven by $destPath's extension.
+        $qualityValue = $quality ?? 85;
         $command = sprintf(
-            '%s %s -colorspace sRGB -strip %s -unsharp 0x0.75 -quality 85%% %s 2>/dev/null',
+            '%s %s -background none -colorspace sRGB -strip %s -unsharp 0x0.75 -quality %d %s 2>/dev/null',
             escapeshellcmd($this->binaryPath),
             escapeshellarg($sourcePath),
             $this->geometryArgs($width, $height, $fit),
+            $qualityValue,
             escapeshellarg($destPath),
         );
 

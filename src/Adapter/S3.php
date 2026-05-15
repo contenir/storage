@@ -117,7 +117,11 @@ final class S3 implements StorageInterface
             return $this->buildPublicUrl($path);
         }
 
-        $variantKey = $this->variantKey($path, $variant);
+        // For multi-format variants, url() returns the first declared format
+        // (callers needing a specific format use variantUrls()).
+        $variantObj = $this->variants->get($variant);
+        $format     = $variantObj->targetFormats()[0] ?? null;
+        $variantKey = $this->variantKey($path, $variant, $format);
         if (! $this->keyExists($variantKey)) {
             return null;
         }
@@ -130,7 +134,34 @@ final class S3 implements StorageInterface
         $path = $this->normalisePath($path);
         $urls = [$this->buildPublicUrl($path)];
         foreach ($this->variants->all() as $variant) {
-            $urls[] = $this->buildPublicUrl($this->variantKey($path, $variant->name));
+            foreach ($variant->targetFormats() as $format) {
+                $urls[] = $this->buildPublicUrl($this->variantKey($path, $variant->name, $format));
+            }
+        }
+        return $urls;
+    }
+
+    /**
+     * URLs for every materialised format of a single variant, keyed by format
+     * (e.g. ['avif' => '…', 'webp' => '…']). When the variant declares no
+     * formats, the only key is 'source' and the value uses the original
+     * extension. URLs are computed without existence checks so callers can
+     * build `<picture>` markup without paying for HEAD round-trips.
+     *
+     * @return array<string, string>
+     */
+    public function variantUrls(string $path, string $variantName): array
+    {
+        if (! $this->variants->has($variantName)) {
+            throw new InvalidArgumentException(sprintf('Unknown variant "%s".', $variantName));
+        }
+        $variant = $this->variants->get($variantName);
+        $path    = $this->normalisePath($path);
+
+        $urls = [];
+        foreach ($variant->targetFormats() as $format) {
+            $key = $format ?? 'source';
+            $urls[$key] = $this->buildPublicUrl($this->variantKey($path, $variantName, $format));
         }
         return $urls;
     }
@@ -221,15 +252,17 @@ final class S3 implements StorageInterface
         unset($this->knownKeys[$path]);
 
         foreach ($this->variants->all() as $variant) {
-            $variantKey = $this->variantKey($path, $variant->name);
-            try {
-                if ($this->fs->fileExists($variantKey)) {
-                    $this->fs->delete($variantKey);
+            foreach ($variant->targetFormats() as $format) {
+                $variantKey = $this->variantKey($path, $variant->name, $format);
+                try {
+                    if ($this->fs->fileExists($variantKey)) {
+                        $this->fs->delete($variantKey);
+                    }
+                } catch (FilesystemException $_e) {
+                    // Variant cleanup is best-effort — primary delete already succeeded.
                 }
-            } catch (FilesystemException $_e) {
-                // Variant cleanup is best-effort — primary delete already succeeded.
+                unset($this->knownKeys[$variantKey]);
             }
-            unset($this->knownKeys[$variantKey]);
         }
     }
 
@@ -258,16 +291,18 @@ final class S3 implements StorageInterface
         $this->knownKeys[$to] = true;
 
         foreach ($this->variants->all() as $variant) {
-            $varFrom = $this->variantKey($from, $variant->name);
-            $varTo   = $this->variantKey($to, $variant->name);
-            try {
-                if ($this->fs->fileExists($varFrom)) {
-                    $this->fs->move($varFrom, $varTo);
-                    unset($this->knownKeys[$varFrom]);
-                    $this->knownKeys[$varTo] = true;
+            foreach ($variant->targetFormats() as $format) {
+                $varFrom = $this->variantKey($from, $variant->name, $format);
+                $varTo   = $this->variantKey($to, $variant->name, $format);
+                try {
+                    if ($this->fs->fileExists($varFrom)) {
+                        $this->fs->move($varFrom, $varTo);
+                        unset($this->knownKeys[$varFrom]);
+                        $this->knownKeys[$varTo] = true;
+                    }
+                } catch (FilesystemException $_e) {
+                    // Variant rename is best-effort — primary rename already succeeded.
                 }
-            } catch (FilesystemException $_e) {
-                // Variant rename is best-effort — primary rename already succeeded.
             }
         }
     }
@@ -295,14 +330,33 @@ final class S3 implements StorageInterface
 
     private function generateVariant(string $sourcePath, string $originalKey, Variant $variant): void
     {
-        $variantKey = $this->variantKey($originalKey, $variant->name);
-        $tmpPath    = tempnam(sys_get_temp_dir(), 'cms_s3_variant_');
-        if ($tmpPath === false) {
+        foreach ($variant->targetFormats() as $format) {
+            $this->generateVariantFormat($sourcePath, $originalKey, $variant, $format);
+        }
+    }
+
+    private function generateVariantFormat(string $sourcePath, string $originalKey, Variant $variant, ?string $format): void
+    {
+        $variantKey = $this->variantKey($originalKey, $variant->name, $format);
+        // ImageMagick infers the output encoder from the destination's extension,
+        // so the tmp file MUST carry the target format's suffix.
+        $ext     = $format ?? pathinfo($originalKey, PATHINFO_EXTENSION) ?: 'tmp';
+        $tmpBase = tempnam(sys_get_temp_dir(), 'cms_s3_variant_');
+        if ($tmpBase === false) {
             throw new WriteException('Cannot allocate temp file for variant generation.');
         }
+        $tmpPath = $tmpBase . '.' . $ext;
+        @rename($tmpBase, $tmpPath);
 
         try {
-            $this->resizer->resize($sourcePath, $tmpPath, $variant->width, $variant->height, $variant->fit);
+            $this->resizer->resize(
+                $sourcePath,
+                $tmpPath,
+                $variant->width,
+                $variant->height,
+                $variant->fit,
+                $variant->quality,
+            );
 
             $stream = @fopen($tmpPath, 'rb');
             if ($stream === false) {
@@ -322,13 +376,12 @@ final class S3 implements StorageInterface
         }
     }
 
-    private function variantKey(string $key, string $variantName): string
+    private function variantKey(string $key, string $variantName, ?string $format = null): string
     {
-        $dot = strrpos($key, '.');
-        if ($dot === false) {
-            return $key . self::VARIANT_SEPARATOR . $variantName;
-        }
-        return substr($key, 0, $dot) . self::VARIANT_SEPARATOR . $variantName . substr($key, $dot);
+        $dot  = strrpos($key, '.');
+        $base = $dot !== false ? substr($key, 0, $dot) : $key;
+        $ext  = $format !== null ? '.' . $format : ($dot !== false ? substr($key, $dot) : '');
+        return $base . self::VARIANT_SEPARATOR . $variantName . $ext;
     }
 
     private function isVariantKey(string $name): bool

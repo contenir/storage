@@ -14,7 +14,7 @@ use Contenir\Storage\VariantFit;
  */
 final class StubImageResizer extends ImageResizer
 {
-    /** @var list<array{source: string, dest: string, width: int, height: int, fit: VariantFit}> */
+    /** @var list<array{source: string, dest: string, width: int, height: int, fit: VariantFit, quality: ?int}> */
     public array $calls = [];
 
     public function __construct()
@@ -28,13 +28,15 @@ final class StubImageResizer extends ImageResizer
         int $width,
         int $height,
         VariantFit $fit = VariantFit::Cover,
+        ?int $quality = null,
     ): void {
         $this->calls[] = [
-            'source' => $sourcePath,
-            'dest'   => $destPath,
-            'width'  => $width,
-            'height' => $height,
-            'fit'    => $fit,
+            'source'  => $sourcePath,
+            'dest'    => $destPath,
+            'width'   => $width,
+            'height'  => $height,
+            'fit'     => $fit,
+            'quality' => $quality,
         ];
 
         $dir = \dirname($destPath);

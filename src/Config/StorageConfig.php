@@ -204,11 +204,21 @@ final class StorageConfig
             if (! is_array($variant)) {
                 throw new InvalidArgumentException(sprintf('Variant "%s" must be an array.', $name));
             }
+
+            $formats = [];
+            if (isset($variant['formats']) && is_array($variant['formats'])) {
+                foreach ($variant['formats'] as $f) {
+                    $formats[] = strtolower(trim((string) $f, " \t\n\r\0\x0B."));
+                }
+            }
+
             $variants[] = new Variant(
-                name:   (string) $name,
-                width:  (int) self::requireString($variant, 'width'),
-                height: (int) self::requireString($variant, 'height'),
-                fit:    self::parseFit((string) ($variant['fit'] ?? 'contain')),
+                name:    (string) $name,
+                width:   (int) self::requireString($variant, 'width'),
+                height:  (int) self::requireString($variant, 'height'),
+                fit:     self::parseFit((string) ($variant['fit'] ?? 'contain')),
+                formats: $formats,
+                quality: isset($variant['quality']) ? (int) $variant['quality'] : null,
             );
         }
 

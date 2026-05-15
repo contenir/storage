@@ -250,6 +250,7 @@ final class LocalFilesystemTest extends TestCase
                 int $width,
                 int $height,
                 \Contenir\Storage\VariantFit $fit = \Contenir\Storage\VariantFit::Cover,
+                ?int $quality = null,
             ): void {
                 throw new \RuntimeException('resizer is on fire');
             }
