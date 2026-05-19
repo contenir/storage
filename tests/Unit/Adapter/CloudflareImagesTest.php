@@ -201,6 +201,29 @@ final class CloudflareImagesTest extends TestCase
         self::assertSame('report.pdf', $entries[0]->name);
     }
 
+    public function testRegenerateMissingVariantsAlwaysEmptyForExistingFile(): void
+    {
+        // URL-transform variants don't need pre-materialising — backfill
+        // is a no-op once the original is in place.
+        $inner = new InMemoryStorage();
+        $inner->putFile('a.png', 'bytes', 'image/png');
+        $backend = $this->backend($inner, [
+            new Variant('admin-thumb', 180, 180, VariantFit::Contain),
+            new Variant('hero', 1600, 1200, VariantFit::Cover, ['avif', 'webp'], 80),
+        ]);
+
+        self::assertSame([], $backend->regenerateMissingVariants('a.png'));
+    }
+
+    public function testRegenerateMissingVariantsThrowsForMissingSource(): void
+    {
+        $inner   = new InMemoryStorage();
+        $backend = $this->backend($inner, [new Variant('admin-thumb', 180, 180)]);
+
+        $this->expectException(\Contenir\Storage\Exception\NotFoundException::class);
+        $backend->regenerateMissingVariants('a.png');
+    }
+
     /**
      * @param list<Variant> $variants
      */

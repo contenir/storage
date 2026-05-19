@@ -210,6 +210,21 @@ final class InMemoryStorage implements StorageInterface
         return new ImageMeta($node['width'], $node['height'], $node['mime']);
     }
 
+    public function regenerateMissingVariants(string $path): array
+    {
+        /**
+         * The in-memory adapter doesn't materialise variants — they're only
+         * tracked when callers explicitly `putFile()` them. Surface the
+         * NotFoundException for missing originals so tests can assert the
+         * same failure shape across adapters; otherwise return [].
+         */
+        $path = $this->normalise($path);
+        if (! isset($this->nodes[$path]) || $this->nodes[$path]['isDir']) {
+            throw NotFoundException::forPath($path);
+        }
+        return [];
+    }
+
     private function entryFor(string $path): Entry
     {
         $node = $this->nodes[$path];

@@ -505,6 +505,52 @@ final class LocalFilesystemTest extends TestCase
         ];
     }
 
+    public function testRegenerateMissingVariantsCreatesAbsentSibling(): void
+    {
+        $this->writePngFileAt('gallery/cat.png', 30, 30);
+        $backend = $this->backend(new VariantRegistry(
+            new Variant('admin-thumb', 180, 180, VariantFit::Contain),
+        ));
+
+        // Prime the variant by calling url() (lazy materialisation) then
+        // delete it so regenerate has something to do.
+        $backend->url('gallery/cat.png', 'admin-thumb');
+        unlink($this->rootPath . '/gallery/_thumbs/admin-thumb/cat.png');
+        $this->resizer->calls = [];
+
+        $regenerated = $backend->regenerateMissingVariants('gallery/cat.png');
+
+        self::assertSame(['gallery/_thumbs/admin-thumb/cat.png'], $regenerated);
+        self::assertCount(1, $this->resizer->calls);
+        self::assertFileExists($this->rootPath . '/gallery/_thumbs/admin-thumb/cat.png');
+    }
+
+    public function testRegenerateMissingVariantsIsIdempotent(): void
+    {
+        $this->writePngFileAt('gallery/cat.png', 30, 30);
+        $backend = $this->backend(new VariantRegistry(
+            new Variant('admin-thumb', 180, 180, VariantFit::Contain),
+        ));
+
+        // Materialise the variant once (lazy via url()), then assert that
+        // a second regenerate call finds nothing to do.
+        $backend->url('gallery/cat.png', 'admin-thumb');
+        $this->resizer->calls = [];
+
+        $regenerated = $backend->regenerateMissingVariants('gallery/cat.png');
+
+        self::assertSame([], $regenerated);
+        self::assertSame([], $this->resizer->calls);
+    }
+
+    public function testRegenerateMissingVariantsThrowsWhenSourceMissing(): void
+    {
+        $backend = $this->backend(new VariantRegistry(new Variant('admin-thumb', 180, 180)));
+
+        $this->expectException(NotFoundException::class);
+        $backend->regenerateMissingVariants('gallery/missing.png');
+    }
+
     private function backend(?VariantRegistry $variants = null): LocalFilesystem
     {
         return new LocalFilesystem(

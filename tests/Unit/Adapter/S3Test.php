@@ -373,6 +373,81 @@ final class S3Test extends TestCase
         $backend->imageMeta('docs/notes.txt');
     }
 
+    public function testRegenerateMissingVariantsCreatesAbsentSiblings(): void
+    {
+        $source  = $this->writePngFile('cat.png', 30, 30);
+        $fs      = new Filesystem(new InMemoryFilesystemAdapter());
+        $backend = new S3(
+            fs:            $fs,
+            publicUrlBase: 'https://cdn.test',
+            variants:      new VariantRegistry(
+                new Variant('admin-thumb', 180, 180, VariantFit::Contain),
+            ),
+            resizer:       $this->resizer,
+        );
+
+        $entry = $backend->store(new UploadInput($source, 'cat.png', 'image/png'), 'gallery');
+        $fs->delete('gallery/cat__admin-thumb.png');
+        $this->resizer->calls = [];
+
+        $regenerated = $backend->regenerateMissingVariants($entry->path);
+
+        self::assertSame(['gallery/cat__admin-thumb.png'], $regenerated);
+        self::assertCount(1, $this->resizer->calls);
+        self::assertTrue($fs->fileExists('gallery/cat__admin-thumb.png'));
+    }
+
+    public function testRegenerateMissingVariantsIsIdempotentWhenEverythingPresent(): void
+    {
+        $source  = $this->writePngFile('cat.png', 30, 30);
+        $backend = $this->backend(new VariantRegistry(
+            new Variant('admin-thumb', 180, 180, VariantFit::Contain),
+        ));
+
+        $entry = $backend->store(new UploadInput($source, 'cat.png', 'image/png'), 'gallery');
+        $this->resizer->calls = [];
+
+        $regenerated = $backend->regenerateMissingVariants($entry->path);
+
+        self::assertSame([], $regenerated);
+        self::assertSame([], $this->resizer->calls, 'No resizer calls expected when nothing is missing.');
+    }
+
+    public function testRegenerateMissingVariantsThrowsWhenSourceMissing(): void
+    {
+        $backend = $this->backend(new VariantRegistry(new Variant('admin-thumb', 180, 180)));
+
+        $this->expectException(NotFoundException::class);
+        $backend->regenerateMissingVariants('gallery/does-not-exist.png');
+    }
+
+    public function testRegenerateMissingVariantsGeneratesAllDeclaredFormats(): void
+    {
+        $source  = $this->writePngFile('hero.png', 30, 30);
+        $fs      = new Filesystem(new InMemoryFilesystemAdapter());
+        $backend = new S3(
+            fs:            $fs,
+            publicUrlBase: 'https://cdn.test',
+            variants:      new VariantRegistry(
+                new Variant('hero', 1600, 1200, VariantFit::Cover, ['avif', 'webp'], 80),
+            ),
+            resizer:       $this->resizer,
+        );
+
+        $entry = $backend->store(new UploadInput($source, 'hero.png', 'image/png'), 'covers');
+        $fs->delete('covers/hero__hero.avif');
+        $fs->delete('covers/hero__hero.webp');
+        $this->resizer->calls = [];
+
+        $regenerated = $backend->regenerateMissingVariants($entry->path);
+
+        sort($regenerated);
+        self::assertSame(['covers/hero__hero.avif', 'covers/hero__hero.webp'], $regenerated);
+        self::assertCount(2, $this->resizer->calls);
+        self::assertTrue($fs->fileExists('covers/hero__hero.avif'));
+        self::assertTrue($fs->fileExists('covers/hero__hero.webp'));
+    }
+
     private function backend(?VariantRegistry $variants = null, string $publicUrlBase = 'https://cdn.test'): S3
     {
         $fs = new Filesystem(new InMemoryFilesystemAdapter());

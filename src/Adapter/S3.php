@@ -328,6 +328,68 @@ final class S3 implements StorageInterface
         return new ImageMeta($info[0], $info[1], $info['mime'] ?? 'application/octet-stream');
     }
 
+    public function regenerateMissingVariants(string $path): array
+    {
+        $path = $this->normalisePath($path);
+        if (! $this->fs->fileExists($path)) {
+            throw NotFoundException::forPath($path);
+        }
+
+        /**
+         * Quick pre-pass: figure out which variant-format combinations are
+         * actually missing, so we don't bother spilling the source object to
+         * disk for an asset that's already fully materialised.
+         */
+        $missing = [];
+        foreach ($this->variants->all() as $variant) {
+            foreach ($variant->targetFormats() as $format) {
+                $variantKey = $this->variantKey($path, $variant->name, $format);
+                if (! $this->keyExists($variantKey)) {
+                    $missing[] = ['variant' => $variant, 'format' => $format, 'key' => $variantKey];
+                }
+            }
+        }
+        if ($missing === []) {
+            return [];
+        }
+
+        /**
+         * Mirror the source object to a local temp file once, then feed each
+         * resize from disk. Reading the body once is significantly cheaper
+         * than streaming the original through ImageMagick N times via stdin.
+         */
+        $sourceExt  = pathinfo($path, PATHINFO_EXTENSION) ?: 'tmp';
+        $sourceBase = tempnam(sys_get_temp_dir(), 'cms_s3_source_');
+        if ($sourceBase === false) {
+            throw new WriteException('Cannot allocate temp file for source download.');
+        }
+        $sourcePath = $sourceBase . '.' . $sourceExt;
+        @rename($sourceBase, $sourcePath);
+
+        try {
+            try {
+                file_put_contents($sourcePath, $this->fs->read($path));
+            } catch (FilesystemException $e) {
+                throw new WriteException(
+                    sprintf('Failed reading source "%s" for variant regeneration: %s', $path, $e->getMessage()),
+                    0,
+                    $e,
+                );
+            }
+
+            $generated = [];
+            foreach ($missing as $entry) {
+                $this->generateVariantFormat($sourcePath, $path, $entry['variant'], $entry['format']);
+                $this->knownKeys[$entry['key']] = true;
+                $generated[] = $entry['key'];
+            }
+
+            return $generated;
+        } finally {
+            @unlink($sourcePath);
+        }
+    }
+
     private function generateVariant(string $sourcePath, string $originalKey, Variant $variant): void
     {
         foreach ($variant->targetFormats() as $format) {

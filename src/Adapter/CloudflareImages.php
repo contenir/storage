@@ -100,6 +100,20 @@ final class CloudflareImages implements StorageInterface
         return $this->objectStore->imageMeta($path);
     }
 
+    public function regenerateMissingVariants(string $path): array
+    {
+        /**
+         * Variants resolve via URL transforms at request time — there's
+         * never anything to pre-materialise. The wrapped object-store
+         * holds only the original; we just delegate so an unknown path
+         * still surfaces a NotFoundException through the underlying call.
+         */
+        if (! $this->objectStore->exists($path)) {
+            return $this->objectStore->regenerateMissingVariants($path); // raises NotFoundException
+        }
+        return [];
+    }
+
     private function buildTransformUrl(string $path, Variant $variant): string
     {
         $params = sprintf(

@@ -394,6 +394,26 @@ final class InMemoryStorageTest extends TestCase
         self::assertCount(1, $entries);
     }
 
+    public function testRegenerateMissingVariantsReturnsEmptyListForExistingFile(): void
+    {
+        // InMemoryStorage doesn't track a variant catalogue — the
+        // regenerate hook is a no-op that surfaces NotFound for missing
+        // sources and otherwise returns [] so tests can assert the
+        // contract uniformly across adapters.
+        $storage = new InMemoryStorage();
+        $storage->putFile('docs/a.txt', 'a');
+
+        self::assertSame([], $storage->regenerateMissingVariants('docs/a.txt'));
+    }
+
+    public function testRegenerateMissingVariantsThrowsForMissingPath(): void
+    {
+        $storage = new InMemoryStorage();
+
+        $this->expectException(\Contenir\Storage\Exception\NotFoundException::class);
+        $storage->regenerateMissingVariants('docs/missing.txt');
+    }
+
     /**
      * @param iterable<Entry> $iterable
      * @return \Generator<int, Entry>

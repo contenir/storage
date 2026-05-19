@@ -284,6 +284,46 @@ final class LocalFilesystem implements StorageInterface
         return new ImageMeta($info[0], $info[1], $info['mime'] ?? 'application/octet-stream');
     }
 
+    public function regenerateMissingVariants(string $path): array
+    {
+        $path     = $this->normalisePath($path);
+        $absolute = $this->resolveAbsolutePath($path);
+
+        if (! is_file($absolute)) {
+            throw NotFoundException::forPath($path);
+        }
+
+        /**
+         * The LocalFilesystem layout stores one file per variant under
+         * `_thumbs/<variantName>/<basename>` — same extension as the source
+         * (no per-format suffix). Format iteration is therefore a no-op
+         * here: each variant materialises as a single file matching the
+         * source extension.
+         */
+        $generated = [];
+        foreach ($this->variants->all() as $variant) {
+            $variantRel = $this->variantRelativePath($path, $variant->name);
+            $variantAbs = $this->resolveAbsolutePath($variantRel);
+            if (is_file($variantAbs)) {
+                continue;
+            }
+
+            try {
+                $this->generateVariant($path, $variant);
+            } catch (\Throwable $e) {
+                throw new WriteException(
+                    sprintf('Failed regenerating variant "%s" for "%s": %s', $variant->name, $path, $e->getMessage()),
+                    0,
+                    $e,
+                );
+            }
+
+            $generated[] = $variantRel;
+        }
+
+        return $generated;
+    }
+
     private function generateVariant(string $relativePath, Variant $variant): void
     {
         $sourceAbs = $this->resolveAbsolutePath($relativePath);

@@ -90,4 +90,28 @@ interface StorageInterface
      * for the asset. Callers fall back to whatever URL they have on hand.
      */
     public function thumbnailUrl(string $path): ?string;
+
+    /**
+     * Materialise registered variants that are missing on the backend for
+     * the given asset. Idempotent — variants that already exist are left
+     * alone. Returns the list of variant keys (sibling object paths) that
+     * were newly generated; an empty list means everything was already in
+     * place.
+     *
+     * Intended for backfill tooling — e.g. an "Asset Indexes" admin
+     * utility — that needs to bring storage in sync with the variant
+     * registry after a config change adds new variants, a package upgrade
+     * extends an existing variant's format set, or an upload arrived
+     * through a code path that bypassed store().
+     *
+     * Backends that resolve variants on demand (e.g. URL-transform
+     * services) return an empty list since there's nothing to
+     * pre-materialise.
+     *
+     * @return list<string>
+     *
+     * @throws NotFoundException If $path itself does not exist.
+     * @throws WriteException    If a variant cannot be generated/written.
+     */
+    public function regenerateMissingVariants(string $path): array;
 }
