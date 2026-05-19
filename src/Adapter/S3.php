@@ -367,14 +367,41 @@ final class S3 implements StorageInterface
         @rename($sourceBase, $sourcePath);
 
         try {
+            /**
+             * Stream the source to disk instead of `fs->read()`'ing the whole
+             * object into a PHP string. A 40 MB image otherwise allocates 40 MB
+             * of PHP memory before hitting the filesystem — multiply by every
+             * row in a long backfill loop and you trip memory_limit mid-run.
+             * stream_copy_to_stream pulls the body 8 KB at a time and never
+             * holds the full payload in memory.
+             */
             try {
-                file_put_contents($sourcePath, $this->fs->read($path));
+                $remote = $this->fs->readStream($path);
             } catch (FilesystemException $e) {
                 throw new WriteException(
-                    sprintf('Failed reading source "%s" for variant regeneration: %s', $path, $e->getMessage()),
+                    sprintf('Failed opening source stream "%s" for variant regeneration: %s', $path, $e->getMessage()),
                     0,
                     $e,
                 );
+            }
+
+            $local = @fopen($sourcePath, 'wb');
+            if ($local === false) {
+                if (is_resource($remote)) {
+                    fclose($remote);
+                }
+                throw new WriteException(sprintf('Cannot open temp file "%s" for writing.', $sourcePath));
+            }
+
+            try {
+                if (stream_copy_to_stream($remote, $local) === false) {
+                    throw new WriteException(sprintf('Failed copying source "%s" to local temp.', $path));
+                }
+            } finally {
+                if (is_resource($remote)) {
+                    fclose($remote);
+                }
+                fclose($local);
             }
 
             $generated = [];
@@ -388,6 +415,20 @@ final class S3 implements StorageInterface
         } finally {
             @unlink($sourcePath);
         }
+    }
+
+    /**
+     * Drop the in-memory cache of observed object keys. Long-running
+     * workers (e.g. asset-index backfill walking thousands of rows) will
+     * otherwise accumulate one entry per touched key + variant for the
+     * lifetime of the process. The cache is purely an optimisation —
+     * it's safe to clear at any point; subsequent `keyExists()` calls
+     * just fall through to a `fileExists()` round-trip until the cache
+     * is re-warmed by `list()` or `store()`.
+     */
+    public function clearKeyCache(): void
+    {
+        $this->knownKeys = [];
     }
 
     private function generateVariant(string $sourcePath, string $originalKey, Variant $variant): void

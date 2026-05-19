@@ -448,6 +448,93 @@ final class S3Test extends TestCase
         self::assertTrue($fs->fileExists('covers/hero__hero.webp'));
     }
 
+    public function testRegenerateMissingVariantsStreamsSourceFromBackend(): void
+    {
+        // Sanity check that the new streaming path materialises the same
+        // local temp file content the legacy slurping path produced. A
+        // bespoke ImageResizer subclass captures the bytes the resizer
+        // was actually fed (we can't query the regenerator's temp file
+        // after the fact — its finally block unlinks it on return).
+        $source      = $this->writePngFile('cat.png', 30, 30);
+        $sourceBytes = (string) file_get_contents($source);
+        $fs          = new Filesystem(new InMemoryFilesystemAdapter());
+
+        $captureResizer = new class () extends \Contenir\Storage\Image\ImageResizer {
+            public ?string $capturedBytes = null;
+            public function __construct()
+            {
+                $this->binaryPath = '/dev/null';
+            }
+            public function resize(
+                string $sourcePath,
+                string $destPath,
+                int $width,
+                int $height,
+                VariantFit $fit = VariantFit::Cover,
+                ?int $quality = null,
+            ): void {
+                $this->capturedBytes = (string) file_get_contents($sourcePath);
+                $dir = \dirname($destPath);
+                if (! is_dir($dir)) {
+                    mkdir($dir, 0o777, true);
+                }
+                file_put_contents($destPath, 'STUB');
+            }
+        };
+
+        $backend = new S3(
+            fs:            $fs,
+            publicUrlBase: 'https://cdn.test',
+            variants:      new VariantRegistry(
+                new Variant('admin-thumb', 180, 180, VariantFit::Contain),
+            ),
+            resizer:       $captureResizer,
+        );
+
+        $entry = $backend->store(new UploadInput($source, 'cat.png', 'image/png'), 'gallery');
+        $fs->delete('gallery/cat__admin-thumb.png');
+        $captureResizer->capturedBytes = null;
+
+        $backend->regenerateMissingVariants($entry->path);
+
+        self::assertSame(
+            $sourceBytes,
+            $captureResizer->capturedBytes,
+            'Streaming download must reproduce source bytes exactly.',
+        );
+    }
+
+    public function testClearKeyCacheForcesReExistenceProbes(): void
+    {
+        $fs      = new Filesystem(new InMemoryFilesystemAdapter());
+        $backend = new S3(
+            fs:            $fs,
+            publicUrlBase: 'https://cdn.test',
+            variants:      new VariantRegistry(),
+            resizer:       $this->resizer,
+        );
+
+        // Warm the cache by listing the prefix containing a known object.
+        $source = $this->writeTempFile('hello.txt', 'data');
+        $backend->store(new UploadInput($source, 'hello.txt', 'text/plain'), 'docs');
+        iterator_to_array($this->iter($backend->list('docs')));
+        self::assertNotNull($backend->url('docs/hello.txt'));
+
+        // Manually nuke the object from the underlying fs (bypassing
+        // delete() so the cache isn't invalidated as a side effect).
+        $fs->delete('docs/hello.txt');
+
+        // Cache says the key exists even though it doesn't (this is the
+        // bug clearKeyCache exists to mitigate in long-running workers).
+        self::assertNotNull($backend->url('docs/hello.txt'));
+
+        $backend->clearKeyCache();
+
+        // After clearing, url() falls through to a real fileExists() and
+        // correctly reports the gone object.
+        self::assertNull($backend->url('docs/hello.txt'));
+    }
+
     private function backend(?VariantRegistry $variants = null, string $publicUrlBase = 'https://cdn.test'): S3
     {
         $fs = new Filesystem(new InMemoryFilesystemAdapter());
