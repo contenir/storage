@@ -28,7 +28,7 @@ use SplFileInfo;
  *
  * Storage shape:
  *   $rootPath/<directory>/<filename>                     - the asset itself
- *   $rootPath/<directory>/_thumbs/<variant>/<filename>   - eager variants
+ *   $rootPath/<directory>/_variant/<variant>/<filename>   - eager variants
  *
  * Entry::$id is md5(name) so the JS layer's existing delete/rename
  * payloads continue to round-trip without change.
@@ -37,7 +37,7 @@ final class LocalFilesystem implements StorageInterface
 {
     use Thumbnail;
 
-    private const THUMBS_DIR    = '_thumbs';
+    private const VARIANT_DIR    = '_variant';
     private const HIDDEN_FILES  = ['.DS_Store', 'Thumbs.db'];
     private const COLLISION_MAX = 1000;
 
@@ -155,7 +155,7 @@ final class LocalFilesystem implements StorageInterface
             if (str_starts_with($name, '.') || in_array($name, self::HIDDEN_FILES, true)) {
                 continue;
             }
-            if ($name === self::THUMBS_DIR) {
+            if ($name === self::VARIANT_DIR) {
                 continue;
             }
 
@@ -295,7 +295,7 @@ final class LocalFilesystem implements StorageInterface
 
         /**
          * The LocalFilesystem layout stores one file per variant under
-         * `_thumbs/<variantName>/<basename>` — same extension as the source
+         * `_variant/<variantName>/<basename>` — same extension as the source
          * (no per-format suffix). Format iteration is therefore a no-op
          * here: each variant materialises as a single file matching the
          * source extension.
@@ -337,7 +337,7 @@ final class LocalFilesystem implements StorageInterface
         $dir  = $this->relativeDirname($relativePath);
         $name = basename($relativePath);
         $base = $dir === '' ? '' : $dir . '/';
-        return sprintf('%s%s/%s/%s', $base, self::THUMBS_DIR, $variantName, $name);
+        return sprintf('%s%s/%s/%s', $base, self::VARIANT_DIR, $variantName, $name);
     }
 
     private function legacyThumbPath(string $relativePath): string
@@ -345,7 +345,7 @@ final class LocalFilesystem implements StorageInterface
         $dir  = $this->relativeDirname($relativePath);
         $name = basename($relativePath);
         $base = $dir === '' ? '' : $dir . '/';
-        return sprintf('%s%s/_%s', $base, self::THUMBS_DIR, $name);
+        return sprintf('%s%s/_%s', $base, self::VARIANT_DIR, $name);
     }
 
     private function buildEntry(string $relativePath, ?SplFileInfo $info = null): Entry
