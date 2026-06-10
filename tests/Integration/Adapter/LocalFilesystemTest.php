@@ -51,9 +51,9 @@ final class LocalFilesystemTest extends TestCase
 
         self::assertSame('photo.png', $entry->name);
         self::assertFileExists($this->rootPath . '/gallery/photo.png');
-        self::assertFileExists($this->rootPath . '/gallery/_thumbs/admin-thumb/photo.png');
+        self::assertFileExists($this->rootPath . '/gallery/_variant/admin-thumb/photo.png');
 
-        $variantInfo = getimagesize($this->rootPath . '/gallery/_thumbs/admin-thumb/photo.png');
+        $variantInfo = getimagesize($this->rootPath . '/gallery/_variant/admin-thumb/photo.png');
         self::assertIsArray($variantInfo);
         self::assertLessThanOrEqual(180, $variantInfo[0]);
         self::assertLessThanOrEqual(180, $variantInfo[1]);
@@ -68,7 +68,7 @@ final class LocalFilesystemTest extends TestCase
 
         $backend->store(new UploadInput($source, 'photo.png', 'image/png'), 'gallery');
 
-        $info = getimagesize($this->rootPath . '/gallery/_thumbs/square/photo.png');
+        $info = getimagesize($this->rootPath . '/gallery/_variant/square/photo.png');
         self::assertIsArray($info);
         self::assertSame(200, $info[0]);
         self::assertSame(200, $info[1]);
@@ -83,7 +83,7 @@ final class LocalFilesystemTest extends TestCase
 
         $backend->store(new UploadInput($source, 'photo.png', 'image/png'), 'gallery');
 
-        $info = getimagesize($this->rootPath . '/gallery/_thumbs/stretched/photo.png');
+        $info = getimagesize($this->rootPath . '/gallery/_variant/stretched/photo.png');
         self::assertIsArray($info);
         self::assertSame(100, $info[0]);
         self::assertSame(50, $info[1]);
@@ -99,14 +99,14 @@ final class LocalFilesystemTest extends TestCase
 
         $backend->store(new UploadInput($source, 'photo.png', 'image/png'), 'gallery');
 
-        self::assertFileExists($this->rootPath . '/gallery/_thumbs/admin-thumb/photo.png');
-        self::assertFileExists($this->rootPath . '/gallery/_thumbs/hero/photo.png');
+        self::assertFileExists($this->rootPath . '/gallery/_variant/admin-thumb/photo.png');
+        self::assertFileExists($this->rootPath . '/gallery/_variant/hero/photo.png');
 
         $backend->delete('gallery/photo.png');
 
         self::assertFileDoesNotExist($this->rootPath . '/gallery/photo.png');
-        self::assertFileDoesNotExist($this->rootPath . '/gallery/_thumbs/admin-thumb/photo.png');
-        self::assertFileDoesNotExist($this->rootPath . '/gallery/_thumbs/hero/photo.png');
+        self::assertFileDoesNotExist($this->rootPath . '/gallery/_variant/admin-thumb/photo.png');
+        self::assertFileDoesNotExist($this->rootPath . '/gallery/_variant/hero/photo.png');
     }
 
     public function testRenameMovesAllVariantsOnDisk(): void
@@ -121,7 +121,7 @@ final class LocalFilesystemTest extends TestCase
 
         self::assertFileDoesNotExist($this->rootPath . '/gallery/photo.png');
         self::assertFileExists($this->rootPath . '/gallery/renamed.png');
-        self::assertFileExists($this->rootPath . '/gallery/_thumbs/admin-thumb/renamed.png');
+        self::assertFileExists($this->rootPath . '/gallery/_variant/admin-thumb/renamed.png');
     }
 
     private function backend(VariantRegistry $variants): LocalFilesystem

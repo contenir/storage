@@ -187,7 +187,7 @@ final class LocalFilesystemTest extends TestCase
 
         $backend->store(new UploadInput($source, 'a.png', 'image/png'), 'docs');
 
-        self::assertSame('/docs/_thumbs/admin-thumb/a.png', $backend->url('docs/a.png', 'admin-thumb'));
+        self::assertSame('/docs/_variant/admin-thumb/a.png', $backend->url('docs/a.png', 'admin-thumb'));
     }
 
     public function testUrlReturnsNullWhenVariantMissing(): void
@@ -210,10 +210,10 @@ final class LocalFilesystemTest extends TestCase
 
         $url = $backend->url('uploads/a.png', 'admin-thumb');
 
-        self::assertSame('/uploads/_thumbs/admin-thumb/a.png', $url);
+        self::assertSame('/uploads/_variant/admin-thumb/a.png', $url);
         self::assertCount(1, $this->resizer->calls, 'resizer should run exactly once');
         self::assertFileExists(
-            $this->rootPath . '/uploads/_thumbs/admin-thumb/a.png',
+            $this->rootPath . '/uploads/_variant/admin-thumb/a.png',
             'variant should be materialised on disk',
         );
     }
@@ -291,7 +291,7 @@ final class LocalFilesystemTest extends TestCase
 
     public function testListExcludesThumbsDirectory(): void
     {
-        mkdir($this->rootPath . '/docs/_thumbs', 0o777, true);
+        mkdir($this->rootPath . '/docs/_variant', 0o777, true);
         file_put_contents($this->rootPath . '/docs/a.txt', 'a');
 
         $entries = iterator_to_array($this->iter(
@@ -391,23 +391,23 @@ final class LocalFilesystemTest extends TestCase
         $backend = $this->backend(new VariantRegistry(new Variant('admin-thumb', 180, 180)));
         $backend->store(new UploadInput($source, 'a.png', 'image/png'), 'docs');
 
-        self::assertFileExists($this->rootPath . '/docs/_thumbs/admin-thumb/a.png');
+        self::assertFileExists($this->rootPath . '/docs/_variant/admin-thumb/a.png');
 
         $backend->delete('docs/a.png');
 
         self::assertFileDoesNotExist($this->rootPath . '/docs/a.png');
-        self::assertFileDoesNotExist($this->rootPath . '/docs/_thumbs/admin-thumb/a.png');
+        self::assertFileDoesNotExist($this->rootPath . '/docs/_variant/admin-thumb/a.png');
     }
 
     public function testDeleteRemovesLegacyThumbLayout(): void
     {
-        mkdir($this->rootPath . '/docs/_thumbs', 0o777, true);
+        mkdir($this->rootPath . '/docs/_variant', 0o777, true);
         file_put_contents($this->rootPath . '/docs/a.png', 'x');
-        file_put_contents($this->rootPath . '/docs/_thumbs/_a.png', 'thumb');
+        file_put_contents($this->rootPath . '/docs/_variant/_a.png', 'thumb');
 
         $this->backend()->delete('docs/a.png');
 
-        self::assertFileDoesNotExist($this->rootPath . '/docs/_thumbs/_a.png');
+        self::assertFileDoesNotExist($this->rootPath . '/docs/_variant/_a.png');
     }
 
     public function testDeleteThrowsForMissingFile(): void
@@ -436,8 +436,8 @@ final class LocalFilesystemTest extends TestCase
 
         self::assertFileExists($this->rootPath . '/docs/renamed.png');
         self::assertFileDoesNotExist($this->rootPath . '/docs/a.png');
-        self::assertFileExists($this->rootPath . '/docs/_thumbs/admin-thumb/renamed.png');
-        self::assertFileDoesNotExist($this->rootPath . '/docs/_thumbs/admin-thumb/a.png');
+        self::assertFileExists($this->rootPath . '/docs/_variant/admin-thumb/renamed.png');
+        self::assertFileDoesNotExist($this->rootPath . '/docs/_variant/admin-thumb/a.png');
     }
 
     public function testRenameThrowsWhenSourceMissing(): void
@@ -515,14 +515,14 @@ final class LocalFilesystemTest extends TestCase
         // Prime the variant by calling url() (lazy materialisation) then
         // delete it so regenerate has something to do.
         $backend->url('gallery/cat.png', 'admin-thumb');
-        unlink($this->rootPath . '/gallery/_thumbs/admin-thumb/cat.png');
+        unlink($this->rootPath . '/gallery/_variant/admin-thumb/cat.png');
         $this->resizer->calls = [];
 
         $regenerated = $backend->regenerateMissingVariants('gallery/cat.png');
 
-        self::assertSame(['gallery/_thumbs/admin-thumb/cat.png'], $regenerated);
+        self::assertSame(['gallery/_variant/admin-thumb/cat.png'], $regenerated);
         self::assertCount(1, $this->resizer->calls);
-        self::assertFileExists($this->rootPath . '/gallery/_thumbs/admin-thumb/cat.png');
+        self::assertFileExists($this->rootPath . '/gallery/_variant/admin-thumb/cat.png');
     }
 
     public function testRegenerateMissingVariantsIsIdempotent(): void
@@ -565,7 +565,7 @@ final class LocalFilesystemTest extends TestCase
     {
         $destPath = $this->resizer->calls[$index]['dest'];
         $parts    = explode('/', $destPath);
-        $idx      = array_search('_thumbs', $parts, true);
+        $idx      = array_search('_variant', $parts, true);
         return is_int($idx) ? ($parts[$idx + 1] ?? '') : '';
     }
 
