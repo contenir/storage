@@ -6,6 +6,7 @@ namespace Contenir\Storage\Adapter;
 
 use DateTimeImmutable;
 use InvalidArgumentException;
+use Contenir\Storage\DefaultUploadResolver;
 use Contenir\Storage\Entry;
 use Contenir\Storage\StorageInterface;
 use Contenir\Storage\Thumbnail;
@@ -16,6 +17,7 @@ use Contenir\Storage\ListOptions;
 use Contenir\Storage\SortDirection;
 use Contenir\Storage\SortField;
 use Contenir\Storage\UploadInput;
+use Contenir\Storage\UploadResolverInterface;
 use Contenir\Storage\VariantRegistry;
 
 /**
@@ -34,10 +36,14 @@ final class InMemoryStorage implements StorageInterface
     /** @var array<string, array{isDir: bool, bytes: string, mime: string, mtime: DateTimeImmutable, width?: int, height?: int}> */
     private array $nodes = [];
 
+    private readonly UploadResolverInterface $resolver;
+
     public function __construct(
         private readonly VariantRegistry $variants = new VariantRegistry(),
         private readonly string $urlScheme = 'memory://',
+        ?UploadResolverInterface $resolver = null,
     ) {
+        $this->resolver = $resolver ?? new DefaultUploadResolver();
     }
 
     public function makeDirectory(string $path): void
@@ -83,23 +89,18 @@ final class InMemoryStorage implements StorageInterface
             throw new WriteException(sprintf('Failed reading upload source "%s".', $upload->sourcePath));
         }
 
-        $name = basename($upload->clientFilename);
-        $path = $this->normalise(rtrim($directory, '/') . '/' . $name);
-        $mime = $upload->clientMime ?? 'application/octet-stream';
+        $resolved = $this->resolver->resolve($upload);
+        $path     = $this->normalise(rtrim($directory, '/') . '/' . $resolved->name);
 
-        $width  = null;
-        $height = null;
-        if (str_starts_with($mime, 'image/')) {
-            $size = @getimagesizefromstring($bytes);
-            if (is_array($size)) {
-                $width  = $size[0];
-                $height = $size[1];
-            }
-        }
+        $this->putFile(
+            $path,
+            $bytes,
+            $resolved->mime,
+            $resolved->image?->width,
+            $resolved->image?->height,
+        );
 
-        $this->putFile($path, $bytes, $mime, $width, $height);
-
-        return $this->entryFor($path);
+        return $this->entryFor($path, $resolved->image);
     }
 
     public function url(string $path, ?string $variant = null): ?string
@@ -124,6 +125,24 @@ final class InMemoryStorage implements StorageInterface
         $urls = [$this->urlScheme . $path];
         foreach ($this->variants->all() as $variant) {
             $urls[] = sprintf('%s%s?v=%s', $this->urlScheme, $path, $variant->name);
+        }
+        return $urls;
+    }
+
+    public function variantUrls(string $path, string $variantName): array
+    {
+        if (! $this->variants->has($variantName)) {
+            throw new InvalidArgumentException(sprintf('Unknown variant "%s".', $variantName));
+        }
+        $variant = $this->variants->get($variantName);
+        $path    = $this->normalise($path);
+
+        $urls = [];
+        foreach ($variant->targetFormats() as $format) {
+            $key = $format ?? 'source';
+            $urls[$key] = $format === null
+                ? sprintf('%s%s?v=%s', $this->urlScheme, $path, $variantName)
+                : sprintf('%s%s?v=%s&f=%s', $this->urlScheme, $path, $variantName, $format);
         }
         return $urls;
     }
@@ -225,7 +244,7 @@ final class InMemoryStorage implements StorageInterface
         return [];
     }
 
-    private function entryFor(string $path): Entry
+    private function entryFor(string $path, ?ImageMeta $image = null): Entry
     {
         $node = $this->nodes[$path];
         $name = basename($path);
@@ -238,6 +257,7 @@ final class InMemoryStorage implements StorageInterface
             size: strlen($node['bytes']),
             mtime: $node['mtime'],
             mime: $node['mime'],
+            image: $image,
         );
     }
 

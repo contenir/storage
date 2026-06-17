@@ -19,6 +19,10 @@ use DateTimeImmutable;
  *
  * For directories, $mime is "inode/directory" so isImage() correctly returns
  * false without a separate type check.
+ *
+ * $image carries the dimensions detected at store() time for raster images;
+ * it is null for directories, non-images, and entries produced by list() (which
+ * does not sniff dimensions). Callers persist it as provenance metadata.
  */
 final readonly class Entry
 {
@@ -30,6 +34,7 @@ final readonly class Entry
         public int $size,
         public DateTimeImmutable $mtime,
         public string $mime,
+        public ?ImageMeta $image = null,
     ) {
     }
 

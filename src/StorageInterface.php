@@ -61,6 +61,23 @@ interface StorageInterface
     public function urlsForKey(string $path): array;
 
     /**
+     * Deterministic public URLs for a single named variant, keyed by output
+     * format (e.g. `['avif' => '…', 'webp' => '…']`). When the variant declares
+     * no formats the only key is `'source'`.
+     *
+     * URLs are built purely from the key plus the variant config — **no
+     * existence checks, no network round-trips**. This is the trusted read
+     * path: a caller that holds a stored key (e.g. from a database row) gets
+     * its variant URLs without paying a HEAD per asset. The asset is assumed to
+     * exist; if it doesn't, the URL simply 404s at fetch time.
+     *
+     * @return array<string, string>
+     *
+     * @throws \InvalidArgumentException If $variantName is not a declared variant.
+     */
+    public function variantUrls(string $path, string $variantName): array;
+
+    /**
      * Browse a directory.
      *
      * @return iterable<Entry>

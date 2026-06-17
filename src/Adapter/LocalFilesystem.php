@@ -13,12 +13,14 @@ use Contenir\Storage\Thumbnail;
 use Contenir\Storage\Exception\NotFoundException;
 use Contenir\Storage\Exception\WriteException;
 use Contenir\Storage\Exception\InvalidPathException;
+use Contenir\Storage\DefaultUploadResolver;
 use Contenir\Storage\Image\ImageResizer;
 use Contenir\Storage\ImageMeta;
 use Contenir\Storage\ListOptions;
 use Contenir\Storage\SortDirection;
 use Contenir\Storage\SortField;
 use Contenir\Storage\UploadInput;
+use Contenir\Storage\UploadResolverInterface;
 use Contenir\Storage\Variant;
 use Contenir\Storage\VariantRegistry;
 use SplFileInfo;
@@ -41,12 +43,16 @@ final class LocalFilesystem implements StorageInterface
     private const HIDDEN_FILES  = ['.DS_Store', 'Thumbs.db'];
     private const COLLISION_MAX = 1000;
 
+    private readonly UploadResolverInterface $resolver;
+
     public function __construct(
         private readonly string $rootPath,
         private readonly string $publicPath,
         private readonly VariantRegistry $variants,
         private readonly ImageResizer $resizer,
+        ?UploadResolverInterface $resolver = null,
     ) {
+        $this->resolver = $resolver ?? new DefaultUploadResolver();
     }
 
     public function store(UploadInput $upload, string $directory): Entry
@@ -64,8 +70,8 @@ final class LocalFilesystem implements StorageInterface
             throw new WriteException(sprintf('Directory "%s" is not writable.', $absoluteDir));
         }
 
-        $sanitised = $this->sanitiseFilename($upload->clientFilename, $upload->clientMime);
-        $finalName = $this->resolveCollision($absoluteDir, $sanitised);
+        $resolved  = $this->resolver->resolve($upload);
+        $finalName = $this->resolveCollision($absoluteDir, $resolved->name);
         $destAbs   = $absoluteDir . \DIRECTORY_SEPARATOR . $finalName;
 
         if (! @copy($upload->sourcePath, $destAbs)) {
@@ -74,13 +80,13 @@ final class LocalFilesystem implements StorageInterface
 
         $relativePath = $directory === '' ? $finalName : $directory . '/' . $finalName;
 
-        if (@getimagesize($destAbs) !== false) {
+        if ($resolved->image !== null) {
             foreach ($this->variants->all() as $variant) {
                 $this->generateVariant($relativePath, $variant);
             }
         }
 
-        return $this->buildEntry($relativePath);
+        return $this->buildEntry($relativePath, image: $resolved->image);
     }
 
     public function url(string $path, ?string $variant = null): ?string
@@ -132,6 +138,25 @@ final class LocalFilesystem implements StorageInterface
         $urls = [$this->buildPublicUrl($path)];
         foreach ($this->variants->all() as $variant) {
             $urls[] = $this->buildPublicUrl($this->variantRelativePath($path, $variant->name));
+        }
+        return $urls;
+    }
+
+    public function variantUrls(string $path, string $variantName): array
+    {
+        if (! $this->variants->has($variantName)) {
+            throw new InvalidArgumentException(sprintf('Unknown variant "%s".', $variantName));
+        }
+        $variant = $this->variants->get($variantName);
+        $path    = $this->normalisePath($path);
+
+        // LocalFilesystem stores a variant as a single sibling file under
+        // _variant/<name>/ with the original extension — there is no per-format
+        // suffix, so every declared format resolves to the same URL.
+        $url  = $this->buildPublicUrl($this->variantRelativePath($path, $variantName));
+        $urls = [];
+        foreach ($variant->targetFormats() as $format) {
+            $urls[$format ?? 'source'] = $url;
         }
         return $urls;
     }
@@ -348,7 +373,7 @@ final class LocalFilesystem implements StorageInterface
         return sprintf('%s%s/_%s', $base, self::VARIANT_DIR, $name);
     }
 
-    private function buildEntry(string $relativePath, ?SplFileInfo $info = null): Entry
+    private function buildEntry(string $relativePath, ?SplFileInfo $info = null, ?ImageMeta $image = null): Entry
     {
         $absolute = $this->resolveAbsolutePath($relativePath);
         $info     = $info ?? new SplFileInfo($absolute);
@@ -366,42 +391,8 @@ final class LocalFilesystem implements StorageInterface
             size:  $isDir ? 0 : (int) $info->getSize(),
             mtime: (new DateTimeImmutable())->setTimestamp((int) $info->getMTime()),
             mime:  $mime,
+            image: $image,
         );
-    }
-
-    private function sanitiseFilename(string $clientFilename, ?string $clientMime = null): string
-    {
-        $name = basename($clientFilename);
-        $dot  = strrpos($name, '.');
-        $rawExt = '';
-        if ($dot !== false) {
-            $rawExt = substr($name, $dot + 1);
-            $name   = substr($name, 0, $dot);
-        }
-        $name = strtolower((string) preg_replace('/[^\w\-]+/', '-', $name));
-        $name = trim((string) preg_replace('/-+/', '-', $name), '-');
-        if ($name === '') {
-            $name = 'file';
-        }
-        $ext = self::extensionFor($clientMime, $rawExt);
-        return $ext === '' ? $name : sprintf('%s.%s', $name, $ext);
-    }
-
-    /**
-     * Map a client MIME type to a canonical lowercase extension. Falls back to
-     * the raw extension lifted from the client filename if the MIME is absent
-     * or unrecognised.
-     */
-    private static function extensionFor(?string $mime, string $fallback): string
-    {
-        return match (strtolower((string) $mime)) {
-            'image/jpeg', 'image/pjpeg'  => 'jpg',
-            'image/png', 'image/x-png'   => 'png',
-            'image/gif'                  => 'gif',
-            'image/webp'                 => 'webp',
-            'image/svg+xml', 'image/svg' => 'svg',
-            default => strtolower((string) preg_replace('/[^\w]/', '', $fallback)),
-        };
     }
 
     private function resolveCollision(string $absoluteDir, string $filename): string

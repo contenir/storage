@@ -10,6 +10,7 @@ use League\Flysystem\InMemory\InMemoryFilesystemAdapter;
 use Contenir\Storage\Entry;
 use Contenir\Storage\Exception\NotFoundException;
 use Contenir\Storage\Exception\WriteException;
+use Contenir\Storage\ImageMeta;
 use Contenir\Storage\ListOptions;
 use Contenir\Storage\SortDirection;
 use Contenir\Storage\SortField;
@@ -61,14 +62,16 @@ final class S3Test extends TestCase
         self::assertSame(md5('hello.txt'), $entry->id);
     }
 
-    public function testStoreSanitisesFilenameAndAppliesMimeOverride(): void
+    public function testStoreDerivesNameAndExtensionFromDetectedType(): void
     {
-        $source  = $this->writeTempFile('test.bin', 'data');
+        $source  = $this->writePngFile('test.bin', 10, 10);
         $backend = $this->backend();
 
+        // Misleading .JPEG name + image/jpeg header; the detected PNG bytes win
+        // and the human part is slugged to hyphens.
         $entry = $backend->store(new UploadInput($source, 'IMG_1234.JPEG', 'image/jpeg'), 'docs');
 
-        self::assertSame('img_1234.jpg', $entry->name);
+        self::assertSame('img-1234.png', $entry->name);
     }
 
     public function testStoreResolvesCollisionWithSuffix(): void
@@ -149,9 +152,53 @@ final class S3Test extends TestCase
         self::assertNull($backend->url('docs/notes.txt', 'admin-thumb'));
     }
 
+    public function testVariantUrlsAreDeterministicWithoutExistenceCheck(): void
+    {
+        // No store() call: the variant (and the original) do NOT exist in the
+        // bucket. variantUrls() must still return the derived URL — it trusts
+        // the key and never issues a HEAD — whereas url() returns null because
+        // it does probe. This is the contract the CMS render path relies on.
+        $backend = $this->backend(new VariantRegistry(new Variant('admin-thumb', 180, 180)));
+
+        self::assertNull($backend->url('docs/ghost.png', 'admin-thumb'));
+        self::assertSame(
+            ['source' => 'https://cdn.test/docs/ghost__admin-thumb.png'],
+            $backend->variantUrls('docs/ghost.png', 'admin-thumb'),
+        );
+    }
+
+    public function testVariantUrlsThrowsForUnknownVariant(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        $this->backend()->variantUrls('docs/a.png', 'no-such-variant');
+    }
+
+    public function testStorePopulatesImageDimensionsAsProvenance(): void
+    {
+        $source  = $this->writePngFile('a.png', 42, 24);
+        $backend = $this->backend();
+
+        $entry = $backend->store(new UploadInput($source, 'a.png', 'image/png'), 'docs');
+
+        self::assertInstanceOf(ImageMeta::class, $entry->image);
+        self::assertSame(42, $entry->image->width);
+        self::assertSame(24, $entry->image->height);
+    }
+
+    public function testStoreLeavesImageNullForNonImages(): void
+    {
+        $source  = $this->writeTempFile('notes.txt', 'just some plain text');
+        $backend = $this->backend();
+
+        $entry = $backend->store(new UploadInput($source, 'notes.txt'), 'docs');
+
+        self::assertNull($entry->image);
+    }
+
     public function testUrlThrowsForUnknownVariant(): void
     {
-        $source  = $this->writeTempFile('a.txt', 'd');
+        $source  = $this->writeTempFile('a.txt', 'plain text body');
         $backend = $this->backend();
         $backend->store(new UploadInput($source, 'a.txt'), 'docs');
 
@@ -227,9 +274,9 @@ final class S3Test extends TestCase
 
     public function testListFiltersByKeyword(): void
     {
-        $source  = $this->writeTempFile('a.txt', 'd');
+        $source  = $this->writeTempFile('a.txt', 'plain text body');
         $backend = $this->backend();
-        $backend->store(new UploadInput($source, 'report.pdf'), 'docs');
+        $backend->store(new UploadInput($source, 'report.txt'), 'docs');
         $backend->store(new UploadInput($source, 'notes.txt'), 'docs');
 
         $entries = iterator_to_array($this->iter(
@@ -237,12 +284,12 @@ final class S3Test extends TestCase
         ));
 
         self::assertCount(1, $entries);
-        self::assertSame('report.pdf', $entries[0]->name);
+        self::assertSame('report.txt', $entries[0]->name);
     }
 
     public function testListSortsByNameDescending(): void
     {
-        $source  = $this->writeTempFile('a.txt', 'd');
+        $source  = $this->writeTempFile('a.txt', 'plain text body');
         $backend = $this->backend();
         $backend->store(new UploadInput($source, 'apple.txt'), 'docs');
         $backend->store(new UploadInput($source, 'zebra.txt'), 'docs');
@@ -257,9 +304,8 @@ final class S3Test extends TestCase
 
     public function testListSortsBySize(): void
     {
-        $source = $this->writeTempFile('a.txt', 'd');
-        $big    = $this->writeTempFile('big.txt', str_repeat('x', 100));
-        $small  = $this->writeTempFile('small.txt', 'x');
+        $big    = $this->writeTempFile('big.txt', str_repeat('a', 100));
+        $small  = $this->writeTempFile('small.txt', 'abc');
 
         $backend = $this->backend();
         $backend->store(new UploadInput($big, 'big.txt'), 'docs');
@@ -275,7 +321,7 @@ final class S3Test extends TestCase
 
     public function testExistsTrueForStoredFile(): void
     {
-        $source  = $this->writeTempFile('a.txt', 'd');
+        $source  = $this->writeTempFile('a.txt', 'plain text body');
         $backend = $this->backend();
         $backend->store(new UploadInput($source, 'a.txt'), 'docs');
 
@@ -332,7 +378,7 @@ final class S3Test extends TestCase
 
     public function testRenameThrowsWhenDestinationExists(): void
     {
-        $source  = $this->writeTempFile('a.txt', 'd');
+        $source  = $this->writeTempFile('a.txt', 'plain text body');
         $backend = $this->backend();
         $backend->store(new UploadInput($source, 'a.txt'), 'docs');
         $backend->store(new UploadInput($source, 'b.txt'), 'docs');

@@ -75,6 +75,18 @@ final class CloudflareImages implements StorageInterface
         return $urls;
     }
 
+    public function variantUrls(string $path, string $variantName): array
+    {
+        if (! $this->variants->has($variantName)) {
+            throw new InvalidArgumentException(sprintf('Unknown variant "%s".', $variantName));
+        }
+
+        // Cloudflare resolves the resized image from the transform URL at
+        // request time, so there is exactly one URL per variant and no object
+        // to exist-check — build it deterministically from the key.
+        return ['source' => $this->buildTransformUrl($path, $this->variants->get($variantName))];
+    }
+
     public function list(string $path, ?ListOptions $options = null): iterable
     {
         return $this->objectStore->list($path, $options);

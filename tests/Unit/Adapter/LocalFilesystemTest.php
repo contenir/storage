@@ -77,24 +77,28 @@ final class LocalFilesystemTest extends TestCase
         self::assertSame('my-file.txt', $entry->name);
     }
 
-    public function testStoreAppliesMimeDrivenExtensionOverride(): void
+    public function testStoreDerivesExtensionFromDetectedTypeNotClientData(): void
     {
         $source  = $this->writePngFile('source.png', 10, 10);
         $backend = $this->backend();
 
+        // Real PNG bytes, but the client lies with a .JPEG name and an
+        // image/jpeg header. The detected type wins, every time.
         $entry = $backend->store(new UploadInput($source, 'IMG_1234.JPEG', 'image/jpeg'), 'docs');
 
-        self::assertSame('img_1234.jpg', $entry->name);
+        self::assertSame('img-1234.png', $entry->name);
     }
 
-    public function testStoreFallsBackToRawExtensionForUnknownMime(): void
+    public function testStoreIgnoresClientExtensionAndUsesDetectedType(): void
     {
-        $source  = $this->writeTempFile('a.txt', 'data');
+        $source  = $this->writeTempFile('a.txt', 'just some plain text');
         $backend = $this->backend();
 
+        // Client claims ".MD" + octet-stream; the bytes are plain text, so the
+        // stored key carries the detected ".txt" extension, never the client's.
         $entry = $backend->store(new UploadInput($source, 'note.MD', 'application/octet-stream'), 'docs');
 
-        self::assertSame('note.md', $entry->name);
+        self::assertSame('note.txt', $entry->name);
     }
 
     public function testStoreResolvesCollisionWithSuffix(): void
@@ -111,7 +115,7 @@ final class LocalFilesystemTest extends TestCase
 
     public function testStoreCreatesTargetDirectory(): void
     {
-        $source  = $this->writeTempFile('a.txt', 'd');
+        $source  = $this->writeTempFile('a.txt', 'plain text body');
         $backend = $this->backend();
 
         $backend->store(new UploadInput($source, 'a.txt'), 'docs/2026/april');
@@ -198,6 +202,27 @@ final class LocalFilesystemTest extends TestCase
         $backend = $this->backend(new VariantRegistry(new Variant('admin-thumb', 180, 180)));
 
         self::assertNull($backend->url('a.png', 'admin-thumb'));
+    }
+
+    public function testVariantUrlsAreDeterministicWithoutTouchingDisk(): void
+    {
+        // Nothing on disk: url() returns null (it stats the file), but
+        // variantUrls() builds the path from the key alone — the trusted,
+        // no-I/O render path.
+        $backend = $this->backend(new VariantRegistry(new Variant('admin-thumb', 180, 180)));
+
+        self::assertNull($backend->url('docs/ghost.png', 'admin-thumb'));
+        self::assertSame(
+            ['source' => '/docs/_variant/admin-thumb/ghost.png'],
+            $backend->variantUrls('docs/ghost.png', 'admin-thumb'),
+        );
+    }
+
+    public function testVariantUrlsThrowsForUnknownVariant(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        $this->backend()->variantUrls('docs/a.png', 'no-such-variant');
     }
 
     public function testUrlLazilyMaterialisesVariantWhenOriginalIsImage(): void

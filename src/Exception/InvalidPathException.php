@@ -31,4 +31,9 @@ final class InvalidPathException extends StorageException
     {
         return new self(sprintf('Path "%s" resolves outside the storage root.', $path));
     }
+
+    public static function forEmptyName(string $clientFilename): self
+    {
+        return new self(sprintf('Filename "%s" has no slug-safe characters to store under.', $clientFilename));
+    }
 }

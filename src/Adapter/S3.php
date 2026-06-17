@@ -10,6 +10,7 @@ use League\Flysystem\FileAttributes;
 use League\Flysystem\FilesystemException;
 use League\Flysystem\FilesystemOperator;
 use League\Flysystem\StorageAttributes;
+use Contenir\Storage\DefaultUploadResolver;
 use Contenir\Storage\Entry;
 use Contenir\Storage\StorageInterface;
 use Contenir\Storage\Thumbnail;
@@ -21,6 +22,7 @@ use Contenir\Storage\ListOptions;
 use Contenir\Storage\SortDirection;
 use Contenir\Storage\SortField;
 use Contenir\Storage\UploadInput;
+use Contenir\Storage\UploadResolverInterface;
 use Contenir\Storage\Variant;
 use Contenir\Storage\VariantRegistry;
 
@@ -59,12 +61,16 @@ final class S3 implements StorageInterface
      */
     private array $knownKeys = [];
 
+    private readonly UploadResolverInterface $resolver;
+
     public function __construct(
         private readonly FilesystemOperator $fs,
         private readonly string $publicUrlBase,
         private readonly VariantRegistry $variants,
         private readonly ImageResizer $resizer,
+        ?UploadResolverInterface $resolver = null,
     ) {
+        $this->resolver = $resolver ?? new DefaultUploadResolver();
     }
 
     public function store(UploadInput $upload, string $directory): Entry
@@ -74,17 +80,19 @@ final class S3 implements StorageInterface
         }
 
         $directory = $this->normalisePath($directory);
-        $sanitised = $this->sanitiseFilename($upload->clientFilename, $upload->clientMime);
-        $finalName = $this->resolveCollision($directory, $sanitised);
+        $resolved  = $this->resolver->resolve($upload);
+        $finalName = $this->resolveCollision($directory, $resolved->name);
         $key       = $directory === '' ? $finalName : $directory . '/' . $finalName;
-        $mime      = $upload->clientMime ?? 'application/octet-stream';
 
         $stream = @fopen($upload->sourcePath, 'rb');
         if ($stream === false) {
             throw new WriteException(sprintf('Failed opening upload source "%s".', $upload->sourcePath));
         }
         try {
-            $this->fs->writeStream($key, $stream, ['ContentType' => $mime]);
+            // ContentType comes from the resolver's DETECTED mime, never the
+            // client-supplied header — the stored object advertises what it
+            // actually is.
+            $this->fs->writeStream($key, $stream, ['ContentType' => $resolved->mime]);
         } catch (FilesystemException $e) {
             throw new WriteException(sprintf('Failed writing "%s": %s', $key, $e->getMessage()), 0, $e);
         } finally {
@@ -93,13 +101,13 @@ final class S3 implements StorageInterface
             }
         }
 
-        if (str_starts_with($mime, 'image/') && @getimagesize($upload->sourcePath) !== false) {
+        if ($resolved->image !== null) {
             foreach ($this->variants->all() as $variant) {
                 $this->generateVariant($upload->sourcePath, $key, $variant);
             }
         }
 
-        return $this->buildEntry($key);
+        return $this->buildEntry($key, image: $resolved->image);
     }
 
     public function url(string $path, ?string $variant = null): ?string
@@ -438,8 +446,12 @@ final class S3 implements StorageInterface
         }
     }
 
-    private function generateVariantFormat(string $sourcePath, string $originalKey, Variant $variant, ?string $format): void
-    {
+    private function generateVariantFormat(
+        string $sourcePath,
+        string $originalKey,
+        Variant $variant,
+        ?string $format,
+    ): void {
         $variantKey = $this->variantKey($originalKey, $variant->name, $format);
         // ImageMagick infers the output encoder from the destination's extension,
         // so the tmp file MUST carry the target format's suffix.
@@ -499,7 +511,7 @@ final class S3 implements StorageInterface
         return $this->variants->has($candidate);
     }
 
-    private function buildEntry(string $key): Entry
+    private function buildEntry(string $key, ?ImageMeta $image = null): Entry
     {
         $name = basename($key);
         try {
@@ -526,6 +538,7 @@ final class S3 implements StorageInterface
             size:  $size,
             mtime: $mtime,
             mime:  $mime,
+            image: $image,
         );
     }
 
@@ -594,36 +607,6 @@ final class S3 implements StorageInterface
     private function normalisePath(string $path): string
     {
         return trim(str_replace('\\', '/', $path), '/');
-    }
-
-    private function sanitiseFilename(string $clientFilename, ?string $clientMime = null): string
-    {
-        $name   = basename($clientFilename);
-        $dot    = strrpos($name, '.');
-        $rawExt = '';
-        if ($dot !== false) {
-            $rawExt = substr($name, $dot + 1);
-            $name   = substr($name, 0, $dot);
-        }
-        $name = strtolower((string) preg_replace('/[^\w\-]+/', '-', $name));
-        $name = trim((string) preg_replace('/-+/', '-', $name), '-');
-        if ($name === '') {
-            $name = 'file';
-        }
-        $ext = self::extensionFor($clientMime, $rawExt);
-        return $ext === '' ? $name : sprintf('%s.%s', $name, $ext);
-    }
-
-    private static function extensionFor(?string $mime, string $fallback): string
-    {
-        return match (strtolower((string) $mime)) {
-            'image/jpeg', 'image/pjpeg'  => 'jpg',
-            'image/png', 'image/x-png'   => 'png',
-            'image/gif'                  => 'gif',
-            'image/webp'                 => 'webp',
-            'image/svg+xml', 'image/svg' => 'svg',
-            default => strtolower((string) preg_replace('/[^\w]/', '', $fallback)),
-        };
     }
 
     private function resolveCollision(string $directory, string $filename): string

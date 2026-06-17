@@ -65,6 +65,29 @@ final class CloudflareImagesTest extends TestCase
         $backend->url('a.jpg', 'no-such-variant');
     }
 
+    public function testVariantUrlsAreDeterministicWithoutExistenceCheck(): void
+    {
+        // The object is NOT in the store. url() probes and returns null, but
+        // variantUrls() trusts the key and builds the transform URL anyway —
+        // no exists() round-trip on the render path.
+        $backend = $this->backend(new InMemoryStorage(), [
+            new Variant('admin-thumb', 180, 180, VariantFit::Contain),
+        ]);
+
+        self::assertNull($backend->url('missing.jpg', 'admin-thumb'));
+        self::assertSame(
+            ['source' => 'https://cdn.example.com/cdn-cgi/image/width=180,height=180,fit=contain/missing.jpg'],
+            $backend->variantUrls('missing.jpg', 'admin-thumb'),
+        );
+    }
+
+    public function testVariantUrlsThrowsForUnknownVariant(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        $this->backend(new InMemoryStorage())->variantUrls('a.jpg', 'no-such-variant');
+    }
+
     public function testUrlStripsLeadingSlashesAndDoubleSlashes(): void
     {
         $inner = new InMemoryStorage();
