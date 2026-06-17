@@ -240,11 +240,6 @@ final class LocalFilesystem implements StorageInterface
             }
         }
 
-        $legacyAbs = $this->resolveAbsolutePath($this->legacyThumbPath($path));
-        if (is_file($legacyAbs)) {
-            @unlink($legacyAbs);
-        }
-
         if (! @unlink($absolute)) {
             throw new WriteException(sprintf('Failed deleting "%s".', $path));
         }
@@ -283,12 +278,6 @@ final class LocalFilesystem implements StorageInterface
                 @mkdir($varDir, 0o777, true);
             }
             @rename($varFrom, $varTo);
-        }
-
-        $legacyFrom = $this->resolveAbsolutePath($this->legacyThumbPath($from));
-        $legacyTo   = $this->resolveAbsolutePath($this->legacyThumbPath($to));
-        if (is_file($legacyFrom)) {
-            @rename($legacyFrom, $legacyTo);
         }
     }
 
@@ -363,14 +352,6 @@ final class LocalFilesystem implements StorageInterface
         $name = basename($relativePath);
         $base = $dir === '' ? '' : $dir . '/';
         return sprintf('%s%s/%s/%s', $base, self::VARIANT_DIR, $variantName, $name);
-    }
-
-    private function legacyThumbPath(string $relativePath): string
-    {
-        $dir  = $this->relativeDirname($relativePath);
-        $name = basename($relativePath);
-        $base = $dir === '' ? '' : $dir . '/';
-        return sprintf('%s%s/_%s', $base, self::VARIANT_DIR, $name);
     }
 
     private function buildEntry(string $relativePath, ?SplFileInfo $info = null, ?ImageMeta $image = null): Entry

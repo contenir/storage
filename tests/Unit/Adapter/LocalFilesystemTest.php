@@ -424,17 +424,6 @@ final class LocalFilesystemTest extends TestCase
         self::assertFileDoesNotExist($this->rootPath . '/docs/_variant/admin-thumb/a.png');
     }
 
-    public function testDeleteRemovesLegacyThumbLayout(): void
-    {
-        mkdir($this->rootPath . '/docs/_variant', 0o777, true);
-        file_put_contents($this->rootPath . '/docs/a.png', 'x');
-        file_put_contents($this->rootPath . '/docs/_variant/_a.png', 'thumb');
-
-        $this->backend()->delete('docs/a.png');
-
-        self::assertFileDoesNotExist($this->rootPath . '/docs/_variant/_a.png');
-    }
-
     public function testDeleteThrowsForMissingFile(): void
     {
         $this->expectException(NotFoundException::class);
