@@ -581,6 +581,138 @@ final class S3Test extends TestCase
         self::assertNull($backend->url('docs/hello.txt'));
     }
 
+    public function testGenerateForKeyMaterialisesMissingVariant(): void
+    {
+        $source  = $this->writePngFile('cat.png', 30, 30);
+        $fs      = new Filesystem(new InMemoryFilesystemAdapter());
+        $backend = new S3(
+            fs:            $fs,
+            publicUrlBase: 'https://cdn.test',
+            variants:      new VariantRegistry(
+                new Variant('admin-thumb', 180, 180, VariantFit::Contain),
+            ),
+            resizer:       $this->resizer,
+        );
+
+        $backend->store(new UploadInput($source, 'cat.png', 'image/png'), 'gallery');
+        $fs->delete('gallery/cat__admin-thumb.png');
+        $this->resizer->calls = [];
+
+        $url = $backend->generateForKey('gallery/cat__admin-thumb.png');
+
+        self::assertSame('https://cdn.test/gallery/cat__admin-thumb.png', $url);
+        self::assertCount(1, $this->resizer->calls);
+        self::assertTrue($fs->fileExists('gallery/cat__admin-thumb.png'));
+    }
+
+    public function testGenerateForKeyReturnsExistingVariantWithoutResizing(): void
+    {
+        $source  = $this->writePngFile('cat.png', 30, 30);
+        $backend = $this->backend(new VariantRegistry(
+            new Variant('admin-thumb', 180, 180, VariantFit::Contain),
+        ));
+        $backend->store(new UploadInput($source, 'cat.png', 'image/png'), 'gallery');
+        $this->resizer->calls = [];
+
+        $url = $backend->generateForKey('gallery/cat__admin-thumb.png');
+
+        self::assertSame('https://cdn.test/gallery/cat__admin-thumb.png', $url);
+        self::assertSame([], $this->resizer->calls, 'An already-present variant must not be regenerated.');
+    }
+
+    public function testGenerateForKeyGeneratesOnlyTheRequestedFormat(): void
+    {
+        $source  = $this->writePngFile('hero.png', 30, 30);
+        $fs      = new Filesystem(new InMemoryFilesystemAdapter());
+        $backend = new S3(
+            fs:            $fs,
+            publicUrlBase: 'https://cdn.test',
+            variants:      new VariantRegistry(
+                new Variant('hero', 1600, 1200, VariantFit::Cover, ['avif', 'webp'], 80),
+            ),
+            resizer:       $this->resizer,
+        );
+        $backend->store(new UploadInput($source, 'hero.png', 'image/png'), 'covers');
+        $fs->delete('covers/hero__hero.avif');
+        $fs->delete('covers/hero__hero.webp');
+        $this->resizer->calls = [];
+
+        $url = $backend->generateForKey('covers/hero__hero.avif');
+
+        self::assertSame('https://cdn.test/covers/hero__hero.avif', $url);
+        self::assertCount(1, $this->resizer->calls, 'Only the requested format should be generated.');
+        self::assertTrue($fs->fileExists('covers/hero__hero.avif'));
+        self::assertFalse($fs->fileExists('covers/hero__hero.webp'));
+    }
+
+    public function testGenerateForKeyReturnsNullForUnknownVariant(): void
+    {
+        $source  = $this->writePngFile('cat.png', 30, 30);
+        $backend = $this->backend(new VariantRegistry(
+            new Variant('admin-thumb', 180, 180, VariantFit::Contain),
+        ));
+        $backend->store(new UploadInput($source, 'cat.png', 'image/png'), 'gallery');
+        $this->resizer->calls = [];
+
+        self::assertNull($backend->generateForKey('gallery/cat__no-such.png'));
+        self::assertSame([], $this->resizer->calls);
+    }
+
+    public function testGenerateForKeyReturnsNullForNonVariantKey(): void
+    {
+        self::assertNull($this->backend()->generateForKey('gallery/cat.png'));
+    }
+
+    public function testGenerateForKeyReturnsNullWhenOriginalMissing(): void
+    {
+        $backend = $this->backend(new VariantRegistry(
+            new Variant('admin-thumb', 180, 180, VariantFit::Contain),
+        ));
+
+        self::assertNull($backend->generateForKey('gallery/ghost__admin-thumb.png'));
+    }
+
+    public function testGenerateForKeyReturnsNullForUnsupportedOutputFormat(): void
+    {
+        $source  = $this->writePngFile('hero.png', 30, 30);
+        $backend = $this->backend(new VariantRegistry(
+            new Variant('hero', 1600, 1200, VariantFit::Cover, ['avif', 'webp'], 80),
+        ));
+        $backend->store(new UploadInput($source, 'hero.png', 'image/png'), 'covers');
+        $this->resizer->calls = [];
+
+        // .tiff is not a web-deliverable raster output the resizer will emit.
+        self::assertNull($backend->generateForKey('covers/hero__hero.tiff'));
+        self::assertSame([], $this->resizer->calls);
+    }
+
+    public function testGenerateForKeyProducesAnyRequestedFormatRegardlessOfDeclaredFormats(): void
+    {
+        // Mirrors the local on-demand resizer: the variant supplies only
+        // dimensions/fit; the format comes from the requested key's extension,
+        // so the <img> source-ext fallback and avif/webp <source>s all resolve.
+        $source  = $this->writePngFile('cat.png', 30, 30);
+        $fs      = new Filesystem(new InMemoryFilesystemAdapter());
+        $backend = new S3(
+            fs:            $fs,
+            publicUrlBase: 'https://cdn.test',
+            variants:      new VariantRegistry(
+                new Variant('card', 600, 600, VariantFit::Cover, ['avif', 'webp'], 75),
+            ),
+            resizer:       $this->resizer,
+        );
+        $backend->store(new UploadInput($source, 'cat.png', 'image/png'), 'gallery');
+        $this->resizer->calls = [];
+
+        // 'card' declares avif/webp, yet the png source-ext fallback is still
+        // generatable on demand for the <img> tag.
+        $url = $backend->generateForKey('gallery/cat__card.png');
+
+        self::assertSame('https://cdn.test/gallery/cat__card.png', $url);
+        self::assertCount(1, $this->resizer->calls);
+        self::assertTrue($fs->fileExists('gallery/cat__card.png'));
+    }
+
     private function backend(?VariantRegistry $variants = null, string $publicUrlBase = 'https://cdn.test'): S3
     {
         $fs = new Filesystem(new InMemoryFilesystemAdapter());

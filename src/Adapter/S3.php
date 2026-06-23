@@ -19,6 +19,7 @@ use Contenir\Storage\Exception\WriteException;
 use Contenir\Storage\Image\ImageResizer;
 use Contenir\Storage\ImageMeta;
 use Contenir\Storage\ListOptions;
+use Contenir\Storage\OnDemandVariantGeneratorInterface;
 use Contenir\Storage\SortDirection;
 use Contenir\Storage\SortField;
 use Contenir\Storage\UploadInput;
@@ -38,12 +39,30 @@ use Contenir\Storage\VariantRegistry;
  * Future optimisation: store width/height in custom object metadata at upload
  * time and resolve via HEAD.
  */
-final class S3 implements StorageInterface
+final class S3 implements StorageInterface, OnDemandVariantGeneratorInterface
 {
     use Thumbnail;
 
     private const VARIANT_SEPARATOR = '__';
     private const COLLISION_MAX     = 1000;
+
+    /**
+     * Extensions probed (in order) when reconstructing an original key from a
+     * variant key — the variant key carries the target format, not the source's.
+     *
+     * @var list<string>
+     */
+    private const SOURCE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'];
+
+    /**
+     * Output formats an on-demand request may ask for. A variant carries only
+     * dimensions/fit; the format comes from the requested key's extension (the
+     * front-end asks for the source extension for the <img> fallback and avif/
+     * webp for <picture> <source>s), mirroring the local on-demand resizer.
+     *
+     * @var list<string>
+     */
+    private const GENERATABLE_FORMATS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'];
 
     /**
      * Per-request positive cache of keys known to exist in the bucket.
@@ -361,57 +380,9 @@ final class S3 implements StorageInterface
             return [];
         }
 
-        /**
-         * Mirror the source object to a local temp file once, then feed each
-         * resize from disk. Reading the body once is significantly cheaper
-         * than streaming the original through ImageMagick N times via stdin.
-         */
-        $sourceExt  = pathinfo($path, PATHINFO_EXTENSION) ?: 'tmp';
-        $sourceBase = tempnam(sys_get_temp_dir(), 'cms_s3_source_');
-        if ($sourceBase === false) {
-            throw new WriteException('Cannot allocate temp file for source download.');
-        }
-        $sourcePath = $sourceBase . '.' . $sourceExt;
-        @rename($sourceBase, $sourcePath);
+        $sourcePath = $this->copySourceToTemp($path);
 
         try {
-            /**
-             * Stream the source to disk instead of `fs->read()`'ing the whole
-             * object into a PHP string. A 40 MB image otherwise allocates 40 MB
-             * of PHP memory before hitting the filesystem — multiply by every
-             * row in a long backfill loop and you trip memory_limit mid-run.
-             * stream_copy_to_stream pulls the body 8 KB at a time and never
-             * holds the full payload in memory.
-             */
-            try {
-                $remote = $this->fs->readStream($path);
-            } catch (FilesystemException $e) {
-                throw new WriteException(
-                    sprintf('Failed opening source stream "%s" for variant regeneration: %s', $path, $e->getMessage()),
-                    0,
-                    $e,
-                );
-            }
-
-            $local = @fopen($sourcePath, 'wb');
-            if ($local === false) {
-                if (is_resource($remote)) {
-                    fclose($remote);
-                }
-                throw new WriteException(sprintf('Cannot open temp file "%s" for writing.', $sourcePath));
-            }
-
-            try {
-                if (stream_copy_to_stream($remote, $local) === false) {
-                    throw new WriteException(sprintf('Failed copying source "%s" to local temp.', $path));
-                }
-            } finally {
-                if (is_resource($remote)) {
-                    fclose($remote);
-                }
-                fclose($local);
-            }
-
             $generated = [];
             foreach ($missing as $entry) {
                 $this->generateVariantFormat($sourcePath, $path, $entry['variant'], $entry['format']);
@@ -423,6 +394,142 @@ final class S3 implements StorageInterface
         } finally {
             @unlink($sourcePath);
         }
+    }
+
+    public function generateForKey(string $variantKey): ?string
+    {
+        $variantKey = $this->normalisePath($variantKey);
+
+        $parsed = $this->parseVariantKey($variantKey);
+        if ($parsed === null) {
+            return null;
+        }
+        [$base, $variantName, $format] = $parsed;
+
+        if (! $this->variants->has($variantName)) {
+            return null;
+        }
+        $variant = $this->variants->get($variantName);
+
+        $format = strtolower($format);
+        if (! in_array($format, self::GENERATABLE_FORMATS, true)) {
+            return null;
+        }
+
+        // Already materialised (or warmed by a sibling list()) — nothing to do.
+        if ($this->keyExists($variantKey)) {
+            return $this->buildPublicUrl($variantKey);
+        }
+
+        $originalKey = $this->resolveOriginalForBase($base);
+        if ($originalKey === null) {
+            return null;
+        }
+
+        $sourcePath = $this->copySourceToTemp($originalKey);
+        try {
+            $this->generateVariantFormat($sourcePath, $originalKey, $variant, $format);
+        } finally {
+            @unlink($sourcePath);
+        }
+        $this->knownKeys[$variantKey] = true;
+
+        return $this->buildPublicUrl($variantKey);
+    }
+
+    /**
+     * Split a variant sibling key into [baseWithoutExtension, variantName, format].
+     * Returns null when the key carries no extension or no variant separator.
+     *
+     * @return array{0: string, 1: string, 2: string}|null
+     */
+    private function parseVariantKey(string $key): ?array
+    {
+        $dot = strrpos($key, '.');
+        if ($dot === false) {
+            return null;
+        }
+        $format = substr($key, $dot + 1);
+        $stem   = substr($key, 0, $dot);
+
+        $sep = strrpos($stem, self::VARIANT_SEPARATOR);
+        if ($sep === false) {
+            return null;
+        }
+        $base        = substr($stem, 0, $sep);
+        $variantName = substr($stem, $sep + strlen(self::VARIANT_SEPARATOR));
+        if ($base === '' || $variantName === '') {
+            return null;
+        }
+
+        return [$base, $variantName, $format];
+    }
+
+    /**
+     * Locate the original object for a variant key's base (extension stripped)
+     * by probing the known source extensions.
+     */
+    private function resolveOriginalForBase(string $base): ?string
+    {
+        foreach (self::SOURCE_EXTENSIONS as $ext) {
+            $candidate = $base . '.' . $ext;
+            if ($this->keyExists($candidate)) {
+                return $candidate;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Stream an object from the backend into a local temp file carrying the
+     * object's extension, returning the temp path. The caller owns the file and
+     * must unlink it. Reading the body once and resizing from disk is far
+     * cheaper than streaming the original through ImageMagick per variant.
+     *
+     * @throws WriteException If the source cannot be opened or copied.
+     */
+    private function copySourceToTemp(string $key): string
+    {
+        $sourceExt  = pathinfo($key, PATHINFO_EXTENSION) ?: 'tmp';
+        $sourceBase = tempnam(sys_get_temp_dir(), 'cms_s3_source_');
+        if ($sourceBase === false) {
+            throw new WriteException('Cannot allocate temp file for source download.');
+        }
+        $sourcePath = $sourceBase . '.' . $sourceExt;
+        @rename($sourceBase, $sourcePath);
+
+        try {
+            $remote = $this->fs->readStream($key);
+        } catch (FilesystemException $e) {
+            @unlink($sourcePath);
+            throw new WriteException(
+                sprintf('Failed opening source stream "%s": %s', $key, $e->getMessage()),
+                0,
+                $e,
+            );
+        }
+
+        $local = @fopen($sourcePath, 'wb');
+        if ($local === false) {
+            if (is_resource($remote)) {
+                fclose($remote);
+            }
+            @unlink($sourcePath);
+            throw new WriteException(sprintf('Cannot open temp file "%s" for writing.', $sourcePath));
+        }
+
+        try {
+            if (stream_copy_to_stream($remote, $local) === false) {
+                throw new WriteException(sprintf('Failed copying source "%s" to local temp.', $key));
+            }
+        } finally {
+            if (is_resource($remote)) {
+                fclose($remote);
+            }
+            fclose($local);
+        }
+
+        return $sourcePath;
     }
 
     /**
