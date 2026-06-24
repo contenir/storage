@@ -205,6 +205,16 @@ final class StorageConfig
                 throw new InvalidArgumentException(sprintf('Variant "%s" must be an array.', $name));
             }
 
+            // Art-directed profile: a `dimensions` ladder expands to one Variant
+            // per rung ("<name>-<width>"). Otherwise it is a single flat variant
+            // declared with explicit width/height (legacy form).
+            if (isset($variant['dimensions'])) {
+                foreach (VariantProfile::fromArray((string) $name, $variant)->variants as $expanded) {
+                    $variants[] = $expanded;
+                }
+                continue;
+            }
+
             $formats = [];
             if (isset($variant['formats']) && is_array($variant['formats'])) {
                 foreach ($variant['formats'] as $f) {

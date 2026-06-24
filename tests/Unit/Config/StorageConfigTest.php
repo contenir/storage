@@ -139,6 +139,34 @@ final class StorageConfigTest extends TestCase
         $backend->url('does-not-exist.jpg', 'no-such-variant');
     }
 
+    public function testArtDirectedProfileExpandsToWidthNamedVariants(): void
+    {
+        $manager = $this->build([
+            'profiles' => [
+                'assets' => [
+                    'type'     => 'local',
+                    'rootPath' => '/var/uploads',
+                    'variants' => [
+                        // Grouped art-directed profile + a flat variant side by side.
+                        'card'        => ['fit' => 'cover', 'dimensions' => ['320x320', '480x480', '768x768']],
+                        'admin-thumb' => ['width' => 180, 'height' => 180, 'fit' => 'contain'],
+                    ],
+                ],
+            ],
+        ]);
+
+        $backend = $manager->get('assets');
+
+        // Expanded rungs and the flat variant are registered (null = known, file missing).
+        self::assertNull($backend->url('missing.jpg', 'card-320'));
+        self::assertNull($backend->url('missing.jpg', 'card-768'));
+        self::assertNull($backend->url('missing.jpg', 'admin-thumb'));
+
+        // The family key itself is not a variant — only its expanded rungs are.
+        $this->expectException(InvalidArgumentException::class);
+        $backend->url('missing.jpg', 'card');
+    }
+
     public function testProfileWithoutVariantsRegistersEmptyRegistry(): void
     {
         $manager = $this->build([
