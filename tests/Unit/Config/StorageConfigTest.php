@@ -234,6 +234,29 @@ final class StorageConfigTest extends TestCase
         ]);
     }
 
+    public function testVariantNamesForBackendGroupsByAssignment(): void
+    {
+        $config = [
+            'backend'  => ['r2' => $this->s3Stub() + ['default' => true]],
+            'variants' => [
+                'admin-thumb' => ['width' => 180, 'height' => 180],
+                'gallery'     => ['dimensions' => ['320x']],
+                'mark'        => ['width' => 160, 'height' => 160, 'backend' => 'local'],
+            ],
+        ];
+
+        self::assertSame(['admin-thumb', 'gallery'], StorageConfig::variantNamesForBackend($config, 'r2'));
+        self::assertSame(['mark'], StorageConfig::variantNamesForBackend($config, 'local'));
+    }
+
+    public function testVariantNamesForBackendUsesLocalPrimaryWhenNoDefault(): void
+    {
+        $config = ['variants' => ['gallery' => ['dimensions' => ['320x']]]];
+
+        self::assertSame(['gallery'], StorageConfig::variantNamesForBackend($config, 'local'));
+        self::assertSame([], StorageConfig::variantNamesForBackend($config, 'r2'));
+    }
+
     public function testResolverFromArrayBuildsPathVariantResolver(): void
     {
         $resolver = StorageConfig::resolverFromArray([

@@ -121,6 +121,41 @@ final class StorageConfig
     }
 
     /**
+     * The declared variant names assigned to a backend (a variant's own
+     * `backend`, else the primary). Lets the CMS asset-index UI/worker list a
+     * backend's variants from the config without building a StorageManager.
+     *
+     * @param array<string, mixed>|null $config The `storage` config array.
+     *
+     * @return list<string>
+     */
+    public static function variantNamesForBackend(?array $config, string $backend): array
+    {
+        $config   = is_array($config) ? $config : [];
+        $declared = is_array($config['backend'] ?? null) ? $config['backend'] : [];
+        $variants = is_array($config['variants'] ?? null) ? $config['variants'] : [];
+
+        $backends = $declared;
+        if (! isset($backends[StorageManager::DEFAULT_PROFILE])) {
+            $backends[StorageManager::DEFAULT_PROFILE] = ['type' => 'local'];
+        }
+        $primary = self::primaryBackendKey($backends);
+
+        $names = [];
+        foreach ($variants as $name => $spec) {
+            if (! is_array($spec)) {
+                continue;
+            }
+            $target = isset($spec['backend']) ? (string) $spec['backend'] : $primary;
+            if ($target === $backend) {
+                $names[] = (string) $name;
+            }
+        }
+
+        return $names;
+    }
+
+    /**
      * @param array<string, mixed> $backends
      */
     /**
