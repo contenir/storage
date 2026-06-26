@@ -24,12 +24,13 @@ use Contenir\Storage\VariantRegistry;
  * Expected shape — three sibling keys, nothing else:
  *
  *   [
- *     // WHERE bytes live. Declare ONLY non-default backends; a plain local site
- *     // declares none and gets an implicit local backend at the web root. With
- *     // more than one, exactly one must carry 'default' => true.
+ *     // WHERE bytes live. A `local` backend (rooted at the web root) is ALWAYS
+ *     // pre-wired; declare extra backends here. Primary = the one flagged
+ *     // 'default' => true, else `local`. Declaring `r2` alone leaves `local`
+ *     // primary; add 'default' => true to promote it.
  *     'backend' => [
- *       'r2' => ['type' => 's3', 'bucket' => '…', 'endpoint' => '…', 'key' => '…', 'secret' => '…'],
- *       // 'local' => ['type' => 'local', 'root_path' => '/abs/override'],  // only to override the default root
+ *       'r2' => ['type' => 's3', 'default' => true, 'bucket' => '…', 'endpoint' => '…', 'key' => '…', 'secret' => '…'],
+ *       // 'local' => ['type' => 'local', 'root_path' => '/abs/override'],  // only to override the pre-wired root
  *     ],
  *     // WHAT transforms exist. Flat; each MAY pin a 'backend' (default = primary).
  *     'variants' => [
@@ -55,25 +56,20 @@ final class StorageConfig
     public static function fromArray(?array $config, ImageResizer $resizer, string $defaultRootPath): StorageManager
     {
         $config   = is_array($config) ? $config : [];
-        $backends = is_array($config['backend'] ?? null) ? $config['backend'] : [];
+        $declared = is_array($config['backend'] ?? null) ? $config['backend'] : [];
         $variants = is_array($config['variants'] ?? null) ? $config['variants'] : [];
+
+        // 'local' is always pre-wired (rooted at the web root) unless the config
+        // declares its own 'local' backend, e.g. to override root_path.
+        $backends = $declared;
+        if (! isset($backends[StorageManager::DEFAULT_PROFILE])) {
+            $backends[StorageManager::DEFAULT_PROFILE] = ['type' => 'local'];
+        }
 
         $primary   = self::primaryBackendKey($backends);
         $byBackend = self::variantsByBackend($variants, $primary, $backends);
 
         $manager = new StorageManager();
-
-        if ($backends === []) {
-            $manager->register($primary, new LocalFilesystem(
-                rootPath:   $defaultRootPath,
-                publicPath: '',
-                variants:   new VariantRegistry(...($byBackend[$primary] ?? [])),
-                resizer:    $resizer,
-            ), true);
-
-            return $manager;
-        }
-
         foreach ($backends as $name => $backend) {
             if (! is_array($backend)) {
                 throw new InvalidArgumentException(sprintf('Backend "%s" must be an array.', $name));
@@ -127,16 +123,14 @@ final class StorageConfig
     /**
      * @param array<string, mixed> $backends
      */
+    /**
+     * Primary = the backend flagged `'default' => true`; if none is flagged, the
+     * always-present `local` backend. More than one flagged is a config error.
+     *
+     * @param array<string, mixed> $backends
+     */
     private static function primaryBackendKey(array $backends): string
     {
-        if ($backends === []) {
-            return StorageManager::DEFAULT_PROFILE;
-        }
-
-        if (count($backends) === 1) {
-            return (string) array_key_first($backends);
-        }
-
         $flagged = [];
         foreach ($backends as $name => $backend) {
             if (is_array($backend) && ($backend['default'] ?? false) === true) {
@@ -144,14 +138,14 @@ final class StorageConfig
             }
         }
 
-        if (count($flagged) === 1) {
-            return $flagged[0];
+        if (count($flagged) > 1) {
+            throw new InvalidArgumentException(sprintf(
+                'At most one backend may declare \'default\' => true (found %d).',
+                count($flagged),
+            ));
         }
 
-        throw new InvalidArgumentException(sprintf(
-            'With multiple backends, exactly one must declare \'default\' => true (found %d).',
-            count($flagged),
-        ));
+        return $flagged[0] ?? StorageManager::DEFAULT_PROFILE;
     }
 
     /**
@@ -172,16 +166,9 @@ final class StorageConfig
             }
 
             $target = isset($spec['backend']) ? (string) $spec['backend'] : $primary;
-            if ($backends !== [] && ! isset($backends[$target])) {
+            if (! isset($backends[$target])) {
                 throw new InvalidArgumentException(sprintf(
                     'Variant "%s" targets unknown backend "%s".',
-                    $name,
-                    $target,
-                ));
-            }
-            if ($backends === [] && $target !== $primary) {
-                throw new InvalidArgumentException(sprintf(
-                    'Variant "%s" targets backend "%s" but no backends are declared.',
                     $name,
                     $target,
                 ));

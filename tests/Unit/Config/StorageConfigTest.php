@@ -50,15 +50,36 @@ final class StorageConfigTest extends TestCase
         self::assertSame('/srv/site/public/file.jpg', $manager->primary()->localPath('file.jpg'));
     }
 
-    public function testSingleDeclaredBackendIsPrimary(): void
+    public function testDeclaredBackendWithoutDefaultLeavesLocalPrimary(): void
     {
         $manager = $this->build([
             'backend' => ['r2' => $this->s3Stub()],
         ]);
 
-        self::assertSame(['r2'], $manager->profiles());
-        self::assertSame('r2', $manager->primaryKey());
+        // 'local' is pre-wired; without a default flag it stays primary.
+        self::assertSame(['r2', 'local'], $manager->profiles());
+        self::assertSame('local', $manager->primaryKey());
         self::assertInstanceOf(S3::class, $manager->get('r2'));
+        self::assertInstanceOf(LocalFilesystem::class, $manager->get('local'));
+    }
+
+    public function testDefaultFlagPromotesBackendToPrimary(): void
+    {
+        $manager = $this->build([
+            'backend' => ['r2' => $this->s3Stub() + ['default' => true]],
+        ]);
+
+        self::assertSame('r2', $manager->primaryKey());
+        self::assertInstanceOf(S3::class, $manager->primary());
+    }
+
+    public function testDeclaredLocalBackendOverridesPrewiredRoot(): void
+    {
+        $manager = $this->build([
+            'backend' => ['local' => ['type' => 'local', 'root_path' => '/custom/root']],
+        ]);
+
+        self::assertSame('/custom/root/file.jpg', $manager->get('local')->localPath('file.jpg'));
     }
 
     public function testLocalBackendRootPathOverridesDefaultRoot(): void
@@ -97,15 +118,15 @@ final class StorageConfigTest extends TestCase
         self::assertSame('r2', $manager->primaryKey());
     }
 
-    public function testMultipleBackendsWithoutDefaultThrows(): void
+    public function testMoreThanOneDefaultThrows(): void
     {
         $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage("'default' => true");
+        $this->expectExceptionMessage('At most one backend');
 
         $this->build([
             'backend' => [
-                'local' => ['type' => 'local'],
-                'r2'    => $this->s3Stub(),
+                'a'  => ['type' => 'local', 'default' => true],
+                'r2' => $this->s3Stub() + ['default' => true],
             ],
         ]);
     }
@@ -162,16 +183,6 @@ final class StorageConfigTest extends TestCase
         $this->build([
             'backend'  => ['main' => ['type' => 'local']],
             'variants' => ['card' => ['width' => 1, 'height' => 1, 'backend' => 'ghost']],
-        ]);
-    }
-
-    public function testVariantTargetingBackendWithNoneDeclaredThrows(): void
-    {
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('no backends are declared');
-
-        $this->build([
-            'variants' => ['card' => ['width' => 1, 'height' => 1, 'backend' => 'r2']],
         ]);
     }
 
