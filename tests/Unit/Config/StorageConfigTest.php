@@ -10,6 +10,7 @@ use Contenir\Storage\Adapter\CloudflareImages;
 use Contenir\Storage\Adapter\LocalFilesystem;
 use Contenir\Storage\Adapter\S3;
 use Contenir\Storage\Image\StubImageResizer;
+use Contenir\Storage\StorageManager;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 
@@ -25,139 +26,125 @@ final class StorageConfigTest extends TestCase
         $this->resizer = new StubImageResizer();
     }
 
-    public function testDefaultBuildsLocalProfileWhenNoConfigSupplied(): void
-    {
-        $manager = StorageConfig::default($this->resizer, '/var/uploads');
-
-        self::assertSame(['local'], $manager->profiles());
-        self::assertInstanceOf(LocalFilesystem::class, $manager->get('local'));
-    }
-
-    public function testFromConfigFallsBackToDefaultWhenConfigIsNull(): void
-    {
-        $manager = StorageConfig::fromArray(null, $this->resizer, '/var/uploads');
-
-        self::assertSame(['local'], $manager->profiles());
-    }
-
-    public function testFromConfigFallsBackToDefaultWhenProfilesMissing(): void
+    public function testNoBackendDeclaredBuildsImplicitLocalPrimary(): void
     {
         $manager = StorageConfig::fromArray([], $this->resizer, '/var/uploads');
 
         self::assertSame(['local'], $manager->profiles());
+        self::assertSame('local', $manager->primaryKey());
+        self::assertInstanceOf(LocalFilesystem::class, $manager->primary());
     }
 
-    public function testBuildsLocalProfile(): void
+    public function testNullConfigBuildsImplicitLocal(): void
+    {
+        $manager = StorageConfig::fromArray(null, $this->resizer, '/var/uploads');
+
+        self::assertSame(['local'], $manager->profiles());
+        self::assertSame('local', $manager->primaryKey());
+    }
+
+    public function testImplicitLocalRootIsTheDefaultRoot(): void
+    {
+        $manager = StorageConfig::fromArray([], $this->resizer, '/srv/site/public');
+
+        self::assertSame('/srv/site/public/file.jpg', $manager->primary()->localPath('file.jpg'));
+    }
+
+    public function testSingleDeclaredBackendIsPrimary(): void
     {
         $manager = $this->build([
-            'profiles' => [
-                'docs-local' => [
-                    'type'       => 'local',
-                    'rootPath'   => '/var/uploads',
-                    'publicPath' => '/uploads',
-                ],
-            ],
+            'backend' => ['r2' => $this->s3Stub()],
         ]);
 
-        self::assertSame(['docs-local'], $manager->profiles());
-        self::assertInstanceOf(LocalFilesystem::class, $manager->get('docs-local'));
+        self::assertSame(['r2'], $manager->profiles());
+        self::assertSame('r2', $manager->primaryKey());
+        self::assertInstanceOf(S3::class, $manager->get('r2'));
     }
 
-    public function testBuildsS3Profile(): void
+    public function testLocalBackendRootPathOverridesDefaultRoot(): void
     {
         $manager = $this->build([
-            'profiles' => [
-                'r2-products' => [
-                    'type'      => 's3',
-                    'endpoint'  => 'https://abc.r2.cloudflarestorage.com',
-                    'region'    => 'auto',
-                    'bucket'    => 'products',
-                    'key'       => 'AKIA...',
-                    'secret'    => 'secret-...',
-                    'publicUrl' => 'https://cdn.example.com',
-                ],
-            ],
+            'backend' => ['main' => ['type' => 'local', 'root_path' => '/explicit/root']],
         ]);
 
-        self::assertInstanceOf(S3::class, $manager->get('r2-products'));
+        self::assertSame('/explicit/root/file.jpg', $manager->get('main')->localPath('file.jpg'));
     }
 
-    public function testBuildsCloudflareImagesProfile(): void
+    public function testCloudflareImagesBackendBuilds(): void
     {
         $manager = $this->build([
-            'profiles' => [
-                'r2-marketing' => [
+            'backend' => [
+                'cf' => $this->s3Stub([
                     'type'            => 'cloudflare-images',
-                    'endpoint'        => 'https://abc.r2.cloudflarestorage.com',
-                    'bucket'          => 'marketing',
-                    'key'             => 'AKIA...',
-                    'secret'          => 'secret-...',
-                    'publicUrl'       => 'https://r2.example.com',
                     'deliveryBaseUrl' => 'https://cdn.example.com',
-                ],
+                ]),
             ],
         ]);
 
-        self::assertInstanceOf(CloudflareImages::class, $manager->get('r2-marketing'));
+        self::assertInstanceOf(CloudflareImages::class, $manager->get('cf'));
     }
 
-    public function testBuildsMultipleProfilesAlongside(): void
+    public function testMultipleBackendsRequireExactlyOneDefault(): void
     {
         $manager = $this->build([
-            'profiles' => [
-                'local'       => ['type' => 'local', 'rootPath' => '/var/uploads'],
-                'r2-products' => $this->s3Stub(),
-                'r2-archive'  => $this->s3Stub(['bucket' => 'archive']),
+            'backend' => [
+                'local' => ['type' => 'local'],
+                'r2'    => $this->s3Stub() + ['default' => true],
             ],
         ]);
 
-        self::assertSame(['local', 'r2-products', 'r2-archive'], $manager->profiles());
+        self::assertSame(['local', 'r2'], $manager->profiles());
+        self::assertSame('r2', $manager->primaryKey());
     }
 
-    public function testProfileVariantsAreRegisteredPerProfile(): void
+    public function testMultipleBackendsWithoutDefaultThrows(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage("'default' => true");
+
+        $this->build([
+            'backend' => [
+                'local' => ['type' => 'local'],
+                'r2'    => $this->s3Stub(),
+            ],
+        ]);
+    }
+
+    public function testVariantsLandOnPrimaryAndOnPinnedBackend(): void
     {
         $manager = $this->build([
-            'profiles' => [
-                'with-variants' => [
-                    'type'     => 'local',
-                    'rootPath' => '/var/uploads',
-                    'variants' => [
-                        'admin-thumb' => ['width' => 180, 'height' => 180, 'fit' => 'contain'],
-                        'card'        => ['width' => 600, 'height' => 400, 'fit' => 'cover'],
-                    ],
-                ],
+            'backend' => [
+                'main' => ['type' => 'local', 'root_path' => '/a', 'default' => true],
+                'side' => ['type' => 'local', 'root_path' => '/b'],
+            ],
+            'variants' => [
+                'admin-thumb' => ['width' => 180, 'height' => 180, 'fit' => 'contain'],
+                'card'        => ['width' => 600, 'height' => 400, 'fit' => 'cover', 'backend' => 'side'],
             ],
         ]);
 
-        $backend = $manager->get('with-variants');
-        // Url throws InvalidArgumentException for unknown variant, returns null for known-but-missing-file.
-        // Exercising both proves the registry was built correctly.
-        self::assertNull($backend->url('does-not-exist.jpg', 'admin-thumb'));
-        self::assertNull($backend->url('does-not-exist.jpg', 'card'));
+        $main = $manager->get('main');
+        $side = $manager->get('side');
+
+        // admin-thumb (unpinned) → primary 'main'; card (pinned) → 'side'.
+        self::assertNull($main->url('x.jpg', 'admin-thumb'));   // known on main, file missing
+        self::assertNull($side->url('x.jpg', 'card'));          // known on side, file missing
 
         $this->expectException(InvalidArgumentException::class);
-        $backend->url('does-not-exist.jpg', 'no-such-variant');
+        $main->url('x.jpg', 'card');                            // not registered on main
     }
 
-    public function testArtDirectedProfileExpandsToWidthNamedVariants(): void
+    public function testArtDirectedLadderExpandsToWidthNamedVariants(): void
     {
         $manager = $this->build([
-            'profiles' => [
-                'assets' => [
-                    'type'     => 'local',
-                    'rootPath' => '/var/uploads',
-                    'variants' => [
-                        // Grouped art-directed profile + a flat variant side by side.
-                        'card'        => ['fit' => 'cover', 'dimensions' => ['320x320', '480x480', '768x768']],
-                        'admin-thumb' => ['width' => 180, 'height' => 180, 'fit' => 'contain'],
-                    ],
-                ],
+            'variants' => [
+                'card'        => ['fit' => 'cover', 'dimensions' => ['320x320', '480x480', '768x768']],
+                'admin-thumb' => ['width' => 180, 'height' => 180, 'fit' => 'contain'],
             ],
         ]);
 
-        $backend = $manager->get('assets');
+        $backend = $manager->primary();
 
-        // Expanded rungs and the flat variant are registered (null = known, file missing).
         self::assertNull($backend->url('missing.jpg', 'card-320'));
         self::assertNull($backend->url('missing.jpg', 'card-768'));
         self::assertNull($backend->url('missing.jpg', 'admin-thumb'));
@@ -167,89 +154,35 @@ final class StorageConfigTest extends TestCase
         $backend->url('missing.jpg', 'card');
     }
 
-    public function testProfileWithoutVariantsRegistersEmptyRegistry(): void
+    public function testVariantTargetingUnknownBackendThrows(): void
     {
-        $manager = $this->build([
-            'profiles' => [
-                'no-variants' => ['type' => 'local', 'rootPath' => '/var/uploads'],
-            ],
-        ]);
-
-        $backend = $manager->get('no-variants');
         $this->expectException(InvalidArgumentException::class);
-        $backend->url('does-not-exist.jpg', 'admin-thumb');
+        $this->expectExceptionMessage('unknown backend');
+
+        $this->build([
+            'backend'  => ['main' => ['type' => 'local']],
+            'variants' => ['card' => ['width' => 1, 'height' => 1, 'backend' => 'ghost']],
+        ]);
     }
 
-    public function testThrowsForUnknownProfileType(): void
+    public function testVariantTargetingBackendWithNoneDeclaredThrows(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('no backends are declared');
+
+        $this->build([
+            'variants' => ['card' => ['width' => 1, 'height' => 1, 'backend' => 'r2']],
+        ]);
+    }
+
+    public function testThrowsForUnknownBackendType(): void
     {
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('unknown type');
 
         $this->build([
-            'profiles' => [
-                'weird' => ['type' => 'azure-blob', 'rootPath' => '/x'],
-            ],
+            'backend' => ['weird' => ['type' => 'azure-blob']],
         ]);
-    }
-
-    public function testLocalWithoutRootPathFallsBackToDefaultRoot(): void
-    {
-        $manager = StorageConfig::fromArray(
-            ['profiles' => ['assets' => ['type' => 'local']]],
-            $this->resizer,
-            '/var/default-root',
-        );
-
-        $backend = $manager->get('assets');
-        self::assertInstanceOf(LocalFilesystem::class, $backend);
-        self::assertSame('/var/default-root/file.jpg', $backend->localPath('file.jpg'));
-    }
-
-    public function testLocalInheritsRootAndPublicPathFromAssetBlock(): void
-    {
-        $manager = StorageConfig::fromArray(
-            [
-                'asset'    => ['root_path' => '/srv/site/public', 'public_path' => '/cdn'],
-                'profiles' => ['assets' => ['type' => 'local']],
-            ],
-            $this->resizer,
-            '/var/default-root',
-        );
-
-        $backend = $manager->get('assets');
-        self::assertInstanceOf(LocalFilesystem::class, $backend);
-        // Absolute asset.root_path wins over the caller's default root.
-        self::assertSame('/srv/site/public/file.jpg', $backend->localPath('file.jpg'));
-    }
-
-    public function testRelativeAssetRootPathIsIgnoredInFavourOfDefaultRoot(): void
-    {
-        // The front-end's site-relative form ("public") is already resolved by
-        // the caller, so it must not be re-joined onto the default root.
-        $manager = StorageConfig::fromArray(
-            [
-                'asset'    => ['root_path' => 'public'],
-                'profiles' => ['assets' => ['type' => 'local']],
-            ],
-            $this->resizer,
-            '/srv/site/public',
-        );
-
-        self::assertSame('/srv/site/public/file.jpg', $manager->get('assets')->localPath('file.jpg'));
-    }
-
-    public function testExplicitProfileRootPathWinsOverAssetBlock(): void
-    {
-        $manager = StorageConfig::fromArray(
-            [
-                'asset'    => ['root_path' => '/srv/site/public'],
-                'profiles' => ['assets' => ['type' => 'local', 'rootPath' => '/explicit/root']],
-            ],
-            $this->resizer,
-            '/var/default-root',
-        );
-
-        self::assertSame('/explicit/root/file.jpg', $manager->get('assets')->localPath('file.jpg'));
     }
 
     public function testThrowsForS3MissingBucket(): void
@@ -258,8 +191,8 @@ final class StorageConfigTest extends TestCase
         $this->expectExceptionMessage('bucket');
 
         $this->build([
-            'profiles' => [
-                'broken' => [
+            'backend' => [
+                'r2' => [
                     'type'      => 's3',
                     'endpoint'  => 'https://e.example.com',
                     'key'       => 'k',
@@ -276,9 +209,7 @@ final class StorageConfigTest extends TestCase
         $this->expectExceptionMessage('deliveryBaseUrl');
 
         $this->build([
-            'profiles' => [
-                'broken' => $this->s3Stub(['type' => 'cloudflare-images']),
-            ],
+            'backend' => ['cf' => $this->s3Stub(['type' => 'cloudflare-images'])],
         ]);
     }
 
@@ -288,25 +219,43 @@ final class StorageConfigTest extends TestCase
         $this->expectExceptionMessage('fit');
 
         $this->build([
-            'profiles' => [
-                'p' => [
-                    'type'     => 'local',
-                    'rootPath' => '/x',
-                    'variants' => [
-                        'v' => ['width' => 100, 'height' => 100, 'fit' => 'squish'],
-                    ],
-                ],
-            ],
+            'variants' => ['v' => ['width' => 100, 'height' => 100, 'fit' => 'squish']],
         ]);
     }
 
-    /** @param array<string, mixed> $config */
-    private function build(array $config): \Contenir\Storage\StorageManager
+    public function testResolverFromArrayBuildsPathVariantResolver(): void
+    {
+        $resolver = StorageConfig::resolverFromArray([
+            'paths' => [
+                '*'                      => ['variants' => ['admin-thumb']],
+                '/asset/library/news/lg' => ['variants' => ['gallery']],
+            ],
+        ]);
+
+        self::assertSame(['gallery', 'admin-thumb'], $resolver->familiesFor('/asset/library/news/lg/x.jpg'));
+        self::assertSame(['admin-thumb'], $resolver->familiesFor('/asset/library/slide/x.jpg'));
+    }
+
+    public function testResolverFromArrayHandlesMissingPaths(): void
+    {
+        $resolver = StorageConfig::resolverFromArray([]);
+
+        self::assertSame([], $resolver->familiesFor('/anything.jpg'));
+    }
+
+    /**
+     * @param array<string, mixed> $config
+     */
+    private function build(array $config): StorageManager
     {
         return StorageConfig::fromArray($config, $this->resizer, '/var/uploads');
     }
 
-    /** @param array<string, mixed> $overrides @return array<string, mixed> */
+    /**
+     * @param array<string, mixed> $overrides
+     *
+     * @return array<string, mixed>
+     */
     private function s3Stub(array $overrides = []): array
     {
         return array_merge([

@@ -17,14 +17,17 @@ use InvalidArgumentException;
 final class StorageManager
 {
     /**
-     * Profile name used when a field config omits the optional <storage> element.
+     * Backend key for the implicit local backend when none is declared.
      */
     public const DEFAULT_PROFILE = 'local';
 
     /** @var array<string, StorageInterface> */
     private array $backends = [];
 
-    public function register(string $profile, StorageInterface $backend): void
+    /** Key of the primary backend: holds originals + variants that don't pin their own. */
+    private ?string $primary = null;
+
+    public function register(string $profile, StorageInterface $backend, bool $isPrimary = false): void
     {
         if ($profile === '') {
             throw new InvalidArgumentException('Storage profile name cannot be empty.');
@@ -33,6 +36,25 @@ final class StorageManager
             throw new InvalidArgumentException(sprintf('Storage profile "%s" is already registered.', $profile));
         }
         $this->backends[$profile] = $backend;
+
+        if ($isPrimary) {
+            $this->primary = $profile;
+        }
+        // Fall back to the first registered backend if none is explicitly primary.
+        $this->primary ??= $profile;
+    }
+
+    /** @throws InvalidArgumentException If no backend is registered. */
+    public function primaryKey(): string
+    {
+        return $this->primary
+            ?? throw new InvalidArgumentException('No storage backend registered.');
+    }
+
+    /** @throws InvalidArgumentException If no backend is registered. */
+    public function primary(): StorageInterface
+    {
+        return $this->get($this->primaryKey());
     }
 
     /** @throws InvalidArgumentException If $profile is not registered. */

@@ -19,58 +19,76 @@ use Contenir\Storage\VariantFit;
 use Contenir\Storage\VariantRegistry;
 
 /**
- * Builds a StorageManager from a profiles array.
+ * Builds a StorageManager from the flat `storage` config.
  *
- * Expected config shape:
+ * Expected shape — three sibling keys, nothing else:
  *
  *   [
- *     // Optional shared backend block (storage.global.php form): local
- *     // profiles that omit their own rootPath/publicPath inherit it from here.
- *     'asset' => ['root_path' => '/abs/path', 'public_path' => ''],
- *     'profiles' => [
- *       '<name>' => [
- *         'type' => 'local' | 's3' | 'cloudflare-images',
- *         // ... type-specific keys ...
- *         'variants' => [
- *           '<vname>' => ['width' => 200, 'height' => 200, 'fit' => 'contain'],
- *           // or an art-directed ladder: ['dimensions' => ['320x', '640x']]
- *         ],
- *       ],
+ *     // WHERE bytes live. Declare ONLY non-default backends; a plain local site
+ *     // declares none and gets an implicit local backend at the web root. With
+ *     // more than one, exactly one must carry 'default' => true.
+ *     'backend' => [
+ *       'r2' => ['type' => 's3', 'bucket' => '…', 'endpoint' => '…', 'key' => '…', 'secret' => '…'],
+ *       // 'local' => ['type' => 'local', 'root_path' => '/abs/override'],  // only to override the default root
  *     ],
+ *     // WHAT transforms exist. Flat; each MAY pin a 'backend' (default = primary).
+ *     'variants' => [
+ *       'admin-thumb' => ['width' => 180, 'height' => 180, 'fit' => 'contain'],
+ *       'gallery'     => ['dimensions' => ['320x', '640x'], 'fit' => 'contain'],
+ *     ],
+ *     // WHICH variants a path owns — keyed by path; '*' is the universal wildcard.
+ *     // Consumed via resolverFromArray(); not needed to build the manager.
+ *     'paths' => ['*' => ['variants' => ['admin-thumb']], '/asset/library/news/lg' => ['variants' => ['gallery']]],
  *   ]
  *
- * Each profile carries its own VariantRegistry. Apps can declare wildly
- * different variant catalogues per profile (e.g. an archive bucket with
- * none, a CDN bucket with several). The optional `asset` block lets the same
- * file the front-end reads — where the backend root lives once under `asset`
- * and each profile declares only its variant catalogue — build a CMS-side
- * StorageManager without restating the root on every local profile.
+ * Each backend carries a VariantRegistry of the variants assigned to it (a
+ * variant's own `backend`, else the primary). The primary backend holds
+ * originals and any variant that doesn't pin its own.
  */
 final class StorageConfig
 {
     /**
-     * @param array<string, mixed>|null $config
+     * @param array<string, mixed>|null $config The `storage` config array.
      *
-     * @throws InvalidArgumentException If a profile is malformed or references an unknown type.
+     * @throws InvalidArgumentException If a backend or variant is malformed.
      */
     public static function fromArray(?array $config, ImageResizer $resizer, string $defaultRootPath): StorageManager
     {
-        $manager = new StorageManager();
-        $profiles = $config['profiles'] ?? null;
+        $config   = is_array($config) ? $config : [];
+        $backends = is_array($config['backend'] ?? null) ? $config['backend'] : [];
+        $variants = is_array($config['variants'] ?? null) ? $config['variants'] : [];
 
-        if (! is_array($profiles) || $profiles === []) {
-            return self::registerDefault($manager, $resizer, $defaultRootPath);
+        $primary   = self::primaryBackendKey($backends);
+        $byBackend = self::variantsByBackend($variants, $primary, $backends);
+
+        $manager = new StorageManager();
+
+        if ($backends === []) {
+            $manager->register($primary, new LocalFilesystem(
+                rootPath:   $defaultRootPath,
+                publicPath: '',
+                variants:   new VariantRegistry(...($byBackend[$primary] ?? [])),
+                resizer:    $resizer,
+            ), true);
+
+            return $manager;
         }
 
-        $asset = is_array($config['asset'] ?? null) ? $config['asset'] : [];
-
-        foreach ($profiles as $name => $profile) {
-            if (! is_array($profile)) {
-                throw new InvalidArgumentException(sprintf('Profile "%s" must be an array.', $name));
+        foreach ($backends as $name => $backend) {
+            if (! is_array($backend)) {
+                throw new InvalidArgumentException(sprintf('Backend "%s" must be an array.', $name));
             }
+            $name = (string) $name;
             $manager->register(
-                (string) $name,
-                self::buildBackend((string) $name, $profile, $asset, $resizer, $defaultRootPath),
+                $name,
+                self::buildBackend(
+                    $name,
+                    $backend,
+                    new VariantRegistry(...($byBackend[$name] ?? [])),
+                    $resizer,
+                    $defaultRootPath,
+                ),
+                $name === $primary,
             );
         }
 
@@ -78,212 +96,245 @@ final class StorageConfig
     }
 
     /**
-     * Build a manager with a single 'local' profile pointed at $rootPath
-     * with one admin-thumb variant. Used when no storage config is supplied
-     * so consumers keep working without a config change.
+     * Build the path → families resolver from the `storage.paths` map. One
+     * canonical construction point reused by generation (worker) and render
+     * (front-end). Each entry is `<path> => ['variants' => [...]]`; the '*' key
+     * declares families owned by every path.
      */
-    public static function default(ImageResizer $resizer, string $rootPath): StorageManager
+    public static function resolverFromArray(?array $config): PathVariantResolver
     {
-        return self::registerDefault(new StorageManager(), $resizer, $rootPath);
-    }
+        $paths = (is_array($config) && is_array($config['paths'] ?? null)) ? $config['paths'] : [];
 
-    private static function registerDefault(
-        StorageManager $manager,
-        ImageResizer $resizer,
-        string $rootPath,
-    ): StorageManager {
-        $manager->register('local', new LocalFilesystem(
-            rootPath:   $rootPath,
-            publicPath: '',
-            variants:   new VariantRegistry(
-                new Variant('admin-thumb', 180, 180, VariantFit::Contain),
-            ),
-            resizer:    $resizer,
-        ));
-        return $manager;
+        $map = [];
+        foreach ($paths as $base => $entry) {
+            $map[(string) $base] = (is_array($entry) && is_array($entry['variants'] ?? null))
+                ? array_values($entry['variants'])
+                : [];
+        }
+
+        return new PathVariantResolver($map);
     }
 
     /**
-     * @param array<string, mixed> $profile
+     * Build a manager with a single implicit local backend at $rootPath. Used
+     * when no storage config is supplied so consumers keep working.
+     */
+    public static function default(ImageResizer $resizer, string $rootPath): StorageManager
+    {
+        return self::fromArray(null, $resizer, $rootPath);
+    }
+
+    /**
+     * @param array<string, mixed> $backends
+     */
+    private static function primaryBackendKey(array $backends): string
+    {
+        if ($backends === []) {
+            return StorageManager::DEFAULT_PROFILE;
+        }
+
+        if (count($backends) === 1) {
+            return (string) array_key_first($backends);
+        }
+
+        $flagged = [];
+        foreach ($backends as $name => $backend) {
+            if (is_array($backend) && ($backend['default'] ?? false) === true) {
+                $flagged[] = (string) $name;
+            }
+        }
+
+        if (count($flagged) === 1) {
+            return $flagged[0];
+        }
+
+        throw new InvalidArgumentException(sprintf(
+            'With multiple backends, exactly one must declare \'default\' => true (found %d).',
+            count($flagged),
+        ));
+    }
+
+    /**
+     * Expand every variant declaration and group the resulting Variant objects
+     * by their target backend (a variant's own `backend`, else the primary).
+     *
+     * @param array<string, mixed> $variants
+     * @param array<string, mixed> $backends
+     *
+     * @return array<string, list<Variant>>
+     */
+    private static function variantsByBackend(array $variants, string $primary, array $backends): array
+    {
+        $byBackend = [];
+        foreach ($variants as $name => $spec) {
+            if (! is_array($spec)) {
+                throw new InvalidArgumentException(sprintf('Variant "%s" must be an array.', $name));
+            }
+
+            $target = isset($spec['backend']) ? (string) $spec['backend'] : $primary;
+            if ($backends !== [] && ! isset($backends[$target])) {
+                throw new InvalidArgumentException(sprintf(
+                    'Variant "%s" targets unknown backend "%s".',
+                    $name,
+                    $target,
+                ));
+            }
+            if ($backends === [] && $target !== $primary) {
+                throw new InvalidArgumentException(sprintf(
+                    'Variant "%s" targets backend "%s" but no backends are declared.',
+                    $name,
+                    $target,
+                ));
+            }
+
+            foreach (self::buildVariant((string) $name, $spec) as $variant) {
+                $byBackend[$target][] = $variant;
+            }
+        }
+
+        return $byBackend;
+    }
+
+    /**
+     * Expand one variant declaration: an art-directed `dimensions` ladder
+     * compiles to one Variant per rung (`<name>-<width>`); otherwise it is a
+     * single flat variant declared with explicit width/height.
+     *
+     * @param array<string, mixed> $spec
+     *
+     * @return list<Variant>
+     */
+    private static function buildVariant(string $name, array $spec): array
+    {
+        if (isset($spec['dimensions'])) {
+            return VariantProfile::fromArray($name, $spec)->variants;
+        }
+
+        $formats = [];
+        if (isset($spec['formats']) && is_array($spec['formats'])) {
+            foreach ($spec['formats'] as $format) {
+                $formats[] = strtolower(trim((string) $format, " \t\n\r\0\x0B."));
+            }
+        }
+
+        return [new Variant(
+            name:    $name,
+            width:   (int) self::requireString($spec, 'width'),
+            height:  (int) self::requireString($spec, 'height'),
+            fit:     self::parseFit((string) ($spec['fit'] ?? 'contain')),
+            formats: $formats,
+            quality: isset($spec['quality']) ? (int) $spec['quality'] : null,
+        )];
+    }
+
+    /**
+     * @param array<string, mixed> $backend
      */
     private static function buildBackend(
-        string $profileName,
-        array $profile,
-        array $asset,
+        string $name,
+        array $backend,
+        VariantRegistry $variants,
         ImageResizer $resizer,
         string $defaultRootPath,
     ): StorageInterface {
-        $type     = (string) ($profile['type'] ?? '');
-        $variants = self::buildVariants($profile['variants'] ?? null);
+        $type = (string) ($backend['type'] ?? 'local');
 
         return match ($type) {
-            'local'             => self::buildLocal($profile, $asset, $variants, $resizer, $defaultRootPath),
-            's3'                => self::buildS3($profile, $variants, $resizer),
-            'cloudflare-images' => self::buildCloudflareImages($profileName, $profile, $variants, $resizer),
+            'local'             => self::buildLocal($backend, $variants, $resizer, $defaultRootPath),
+            's3'                => self::buildS3($backend, $variants, $resizer),
+            'cloudflare-images' => self::buildCloudflareImages($name, $backend, $variants, $resizer),
             default => throw new InvalidArgumentException(sprintf(
-                'Profile "%s" has unknown type "%s" (expected: local, s3, cloudflare-images).',
-                $profileName,
+                'Backend "%s" has unknown type "%s" (expected: local, s3, cloudflare-images).',
+                $name,
                 $type,
             )),
         };
     }
 
     /**
-     * Build the local-filesystem backend for a profile.
+     * Local-filesystem backend. An explicit `root_path` on the backend overrides
+     * the caller's default root (the resolved web root); otherwise the default is
+     * used, so a backend-less local site needs no `root_path` at all.
      *
-     * `rootPath`/`publicPath` may sit on the profile directly, or be inherited
-     * from the shared `asset` block (`root_path`/`public_path`) that the
-     * front-end catalogue (storage.global.php) declares once for every profile —
-     * there the profile carries only its variant catalogue. An absent root falls
-     * back to the caller's default root (the resolved public dir), so a
-     * variants-only profile still builds a usable backend rather than throwing.
-     *
-     * @param array<string, mixed> $profile
-     * @param array<string, mixed> $asset
+     * @param array<string, mixed> $backend
      */
     private static function buildLocal(
-        array $profile,
-        array $asset,
+        array $backend,
         VariantRegistry $variants,
         ImageResizer $resizer,
         string $defaultRootPath,
     ): LocalFilesystem {
+        $root = (string) ($backend['root_path'] ?? '');
+
         return new LocalFilesystem(
-            rootPath:   self::resolveLocalRoot($profile, $asset, $defaultRootPath),
-            publicPath: (string) ($profile['publicPath'] ?? $asset['public_path'] ?? ''),
+            rootPath:   $root !== '' ? $root : $defaultRootPath,
+            publicPath: (string) ($backend['public_path'] ?? ''),
             variants:   $variants,
             resizer:    $resizer,
         );
     }
 
     /**
-     * Resolve the local backend root: an explicit profile `rootPath` wins; then
-     * an absolute `asset.root_path`; otherwise the caller's default root. A
-     * relative `asset.root_path` (e.g. "public") is the front-end's
-     * site-relative form — already resolved by the caller and passed in as
-     * $defaultRootPath — so it is not joined here.
-     *
-     * @param array<string, mixed> $profile
-     * @param array<string, mixed> $asset
-     */
-    private static function resolveLocalRoot(array $profile, array $asset, string $defaultRootPath): string
-    {
-        $explicit = (string) ($profile['rootPath'] ?? '');
-        if ($explicit !== '') {
-            return $explicit;
-        }
-
-        $assetRoot = (string) ($asset['root_path'] ?? '');
-        if ($assetRoot !== '' && str_starts_with($assetRoot, '/')) {
-            return $assetRoot;
-        }
-
-        return $defaultRootPath;
-    }
-
-    /**
-     * @param array<string, mixed> $profile
+     * @param array<string, mixed> $backend
      */
     private static function buildS3(
-        array $profile,
+        array $backend,
         VariantRegistry $variants,
         ImageResizer $resizer,
     ): S3 {
         return new S3(
-            fs:            self::buildFlysystem($profile),
-            publicUrlBase: self::requireString($profile, 'publicUrl'),
+            fs:            self::buildFlysystem($backend),
+            publicUrlBase: self::requireString($backend, 'publicUrl'),
             variants:      $variants,
             resizer:       $resizer,
         );
     }
 
     /**
-     * @param array<string, mixed> $profile
+     * @param array<string, mixed> $backend
      */
     private static function buildCloudflareImages(
-        string $profileName,
-        array $profile,
+        string $name,
+        array $backend,
         VariantRegistry $variants,
         ImageResizer $resizer,
     ): CloudflareImages {
         // The wrapped object store doesn't pre-generate variants — they resolve
         // through Cloudflare URL transforms at url() time.
         $inner = new S3(
-            fs:            self::buildFlysystem($profile),
-            publicUrlBase: self::requireString($profile, 'publicUrl'),
+            fs:            self::buildFlysystem($backend),
+            publicUrlBase: self::requireString($backend, 'publicUrl'),
             variants:      new VariantRegistry(),
             resizer:       $resizer,
         );
 
         return new CloudflareImages(
             objectStore:     $inner,
-            deliveryBaseUrl: self::requireString($profile, 'deliveryBaseUrl'),
+            deliveryBaseUrl: self::requireString($backend, 'deliveryBaseUrl'),
             variants:        $variants,
         );
     }
 
     /**
-     * @param array<string, mixed> $profile
+     * @param array<string, mixed> $backend
      */
-    private static function buildFlysystem(array $profile): Filesystem
+    private static function buildFlysystem(array $backend): Filesystem
     {
         $client = new S3Client([
             'version'                 => 'latest',
-            'region'                  => (string) ($profile['region'] ?? 'auto'),
-            'endpoint'                => self::requireString($profile, 'endpoint'),
+            'region'                  => (string) ($backend['region'] ?? 'auto'),
+            'endpoint'                => self::requireString($backend, 'endpoint'),
             'credentials'             => [
-                'key'    => self::requireString($profile, 'key'),
-                'secret' => self::requireString($profile, 'secret'),
+                'key'    => self::requireString($backend, 'key'),
+                'secret' => self::requireString($backend, 'secret'),
             ],
-            'use_path_style_endpoint' => (bool) ($profile['usePathStyleEndpoint'] ?? false),
+            'use_path_style_endpoint' => (bool) ($backend['usePathStyleEndpoint'] ?? false),
         ]);
 
         return new Filesystem(new AwsS3V3Adapter(
             $client,
-            self::requireString($profile, 'bucket'),
+            self::requireString($backend, 'bucket'),
         ));
-    }
-
-    private static function buildVariants(mixed $variantsConfig): VariantRegistry
-    {
-        if (! is_array($variantsConfig)) {
-            return new VariantRegistry();
-        }
-
-        $variants = [];
-        foreach ($variantsConfig as $name => $variant) {
-            if (! is_array($variant)) {
-                throw new InvalidArgumentException(sprintf('Variant "%s" must be an array.', $name));
-            }
-
-            // Art-directed profile: a `dimensions` ladder expands to one Variant
-            // per rung ("<name>-<width>"). Otherwise it is a single flat variant
-            // declared with explicit width/height (legacy form).
-            if (isset($variant['dimensions'])) {
-                foreach (VariantProfile::fromArray((string) $name, $variant)->variants as $expanded) {
-                    $variants[] = $expanded;
-                }
-                continue;
-            }
-
-            $formats = [];
-            if (isset($variant['formats']) && is_array($variant['formats'])) {
-                foreach ($variant['formats'] as $f) {
-                    $formats[] = strtolower(trim((string) $f, " \t\n\r\0\x0B."));
-                }
-            }
-
-            $variants[] = new Variant(
-                name:    (string) $name,
-                width:   (int) self::requireString($variant, 'width'),
-                height:  (int) self::requireString($variant, 'height'),
-                fit:     self::parseFit((string) ($variant['fit'] ?? 'contain')),
-                formats: $formats,
-                quality: isset($variant['quality']) ? (int) $variant['quality'] : null,
-            );
-        }
-
-        return new VariantRegistry(...$variants);
     }
 
     private static function parseFit(string $fit): VariantFit
