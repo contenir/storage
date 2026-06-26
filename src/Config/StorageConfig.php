@@ -24,12 +24,16 @@ use Contenir\Storage\VariantRegistry;
  * Expected config shape:
  *
  *   [
+ *     // Optional shared backend block (storage.global.php form): local
+ *     // profiles that omit their own rootPath/publicPath inherit it from here.
+ *     'asset' => ['root_path' => '/abs/path', 'public_path' => ''],
  *     'profiles' => [
  *       '<name>' => [
  *         'type' => 'local' | 's3' | 'cloudflare-images',
  *         // ... type-specific keys ...
  *         'variants' => [
  *           '<vname>' => ['width' => 200, 'height' => 200, 'fit' => 'contain'],
+ *           // or an art-directed ladder: ['dimensions' => ['320x', '640x']]
  *         ],
  *       ],
  *     ],
@@ -37,7 +41,10 @@ use Contenir\Storage\VariantRegistry;
  *
  * Each profile carries its own VariantRegistry. Apps can declare wildly
  * different variant catalogues per profile (e.g. an archive bucket with
- * none, a CDN bucket with several).
+ * none, a CDN bucket with several). The optional `asset` block lets the same
+ * file the front-end reads — where the backend root lives once under `asset`
+ * and each profile declares only its variant catalogue — build a CMS-side
+ * StorageManager without restating the root on every local profile.
  */
 final class StorageConfig
 {
@@ -55,11 +62,16 @@ final class StorageConfig
             return self::registerDefault($manager, $resizer, $defaultRootPath);
         }
 
+        $asset = is_array($config['asset'] ?? null) ? $config['asset'] : [];
+
         foreach ($profiles as $name => $profile) {
             if (! is_array($profile)) {
                 throw new InvalidArgumentException(sprintf('Profile "%s" must be an array.', $name));
             }
-            $manager->register((string) $name, self::buildBackend((string) $name, $profile, $resizer));
+            $manager->register(
+                (string) $name,
+                self::buildBackend((string) $name, $profile, $asset, $resizer, $defaultRootPath),
+            );
         }
 
         return $manager;
@@ -97,13 +109,15 @@ final class StorageConfig
     private static function buildBackend(
         string $profileName,
         array $profile,
+        array $asset,
         ImageResizer $resizer,
+        string $defaultRootPath,
     ): StorageInterface {
         $type     = (string) ($profile['type'] ?? '');
         $variants = self::buildVariants($profile['variants'] ?? null);
 
         return match ($type) {
-            'local'             => self::buildLocal($profile, $variants, $resizer),
+            'local'             => self::buildLocal($profile, $asset, $variants, $resizer, $defaultRootPath),
             's3'                => self::buildS3($profile, $variants, $resizer),
             'cloudflare-images' => self::buildCloudflareImages($profileName, $profile, $variants, $resizer),
             default => throw new InvalidArgumentException(sprintf(
@@ -115,19 +129,56 @@ final class StorageConfig
     }
 
     /**
+     * Build the local-filesystem backend for a profile.
+     *
+     * `rootPath`/`publicPath` may sit on the profile directly, or be inherited
+     * from the shared `asset` block (`root_path`/`public_path`) that the
+     * front-end catalogue (storage.global.php) declares once for every profile —
+     * there the profile carries only its variant catalogue. An absent root falls
+     * back to the caller's default root (the resolved public dir), so a
+     * variants-only profile still builds a usable backend rather than throwing.
+     *
      * @param array<string, mixed> $profile
+     * @param array<string, mixed> $asset
      */
     private static function buildLocal(
         array $profile,
+        array $asset,
         VariantRegistry $variants,
         ImageResizer $resizer,
+        string $defaultRootPath,
     ): LocalFilesystem {
         return new LocalFilesystem(
-            rootPath:   self::requireString($profile, 'rootPath'),
-            publicPath: (string) ($profile['publicPath'] ?? ''),
+            rootPath:   self::resolveLocalRoot($profile, $asset, $defaultRootPath),
+            publicPath: (string) ($profile['publicPath'] ?? $asset['public_path'] ?? ''),
             variants:   $variants,
             resizer:    $resizer,
         );
+    }
+
+    /**
+     * Resolve the local backend root: an explicit profile `rootPath` wins; then
+     * an absolute `asset.root_path`; otherwise the caller's default root. A
+     * relative `asset.root_path` (e.g. "public") is the front-end's
+     * site-relative form — already resolved by the caller and passed in as
+     * $defaultRootPath — so it is not joined here.
+     *
+     * @param array<string, mixed> $profile
+     * @param array<string, mixed> $asset
+     */
+    private static function resolveLocalRoot(array $profile, array $asset, string $defaultRootPath): string
+    {
+        $explicit = (string) ($profile['rootPath'] ?? '');
+        if ($explicit !== '') {
+            return $explicit;
+        }
+
+        $assetRoot = (string) ($asset['root_path'] ?? '');
+        if ($assetRoot !== '' && str_starts_with($assetRoot, '/')) {
+            return $assetRoot;
+        }
+
+        return $defaultRootPath;
     }
 
     /**

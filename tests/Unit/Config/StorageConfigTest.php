@@ -192,16 +192,64 @@ final class StorageConfigTest extends TestCase
         ]);
     }
 
-    public function testThrowsForLocalMissingRootPath(): void
+    public function testLocalWithoutRootPathFallsBackToDefaultRoot(): void
     {
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('rootPath');
+        $manager = StorageConfig::fromArray(
+            ['profiles' => ['assets' => ['type' => 'local']]],
+            $this->resizer,
+            '/var/default-root',
+        );
 
-        $this->build([
-            'profiles' => [
-                'broken' => ['type' => 'local'],
+        $backend = $manager->get('assets');
+        self::assertInstanceOf(LocalFilesystem::class, $backend);
+        self::assertSame('/var/default-root/file.jpg', $backend->localPath('file.jpg'));
+    }
+
+    public function testLocalInheritsRootAndPublicPathFromAssetBlock(): void
+    {
+        $manager = StorageConfig::fromArray(
+            [
+                'asset'    => ['root_path' => '/srv/site/public', 'public_path' => '/cdn'],
+                'profiles' => ['assets' => ['type' => 'local']],
             ],
-        ]);
+            $this->resizer,
+            '/var/default-root',
+        );
+
+        $backend = $manager->get('assets');
+        self::assertInstanceOf(LocalFilesystem::class, $backend);
+        // Absolute asset.root_path wins over the caller's default root.
+        self::assertSame('/srv/site/public/file.jpg', $backend->localPath('file.jpg'));
+    }
+
+    public function testRelativeAssetRootPathIsIgnoredInFavourOfDefaultRoot(): void
+    {
+        // The front-end's site-relative form ("public") is already resolved by
+        // the caller, so it must not be re-joined onto the default root.
+        $manager = StorageConfig::fromArray(
+            [
+                'asset'    => ['root_path' => 'public'],
+                'profiles' => ['assets' => ['type' => 'local']],
+            ],
+            $this->resizer,
+            '/srv/site/public',
+        );
+
+        self::assertSame('/srv/site/public/file.jpg', $manager->get('assets')->localPath('file.jpg'));
+    }
+
+    public function testExplicitProfileRootPathWinsOverAssetBlock(): void
+    {
+        $manager = StorageConfig::fromArray(
+            [
+                'asset'    => ['root_path' => '/srv/site/public'],
+                'profiles' => ['assets' => ['type' => 'local', 'rootPath' => '/explicit/root']],
+            ],
+            $this->resizer,
+            '/var/default-root',
+        );
+
+        self::assertSame('/explicit/root/file.jpg', $manager->get('assets')->localPath('file.jpg'));
     }
 
     public function testThrowsForS3MissingBucket(): void
