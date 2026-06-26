@@ -86,6 +86,13 @@ final class PathVariantResolverTest extends TestCase
         ];
     }
 
+    public function testIsConfiguredReflectsWhetherAnyOwnershipIsDeclared(): void
+    {
+        self::assertFalse((new PathVariantResolver([]))->isConfigured());
+        self::assertTrue((new PathVariantResolver(['*' => ['admin-thumb']]))->isConfigured());
+        self::assertTrue((new PathVariantResolver(['/asset/x' => ['gallery']]))->isConfigured());
+    }
+
     public function testAllowsAcceptsFamilyRungAndUniversal(): void
     {
         $resolver = self::resolver();

@@ -84,6 +84,16 @@ final readonly class PathVariantResolver
     }
 
     /**
+     * Whether any ownership is declared at all (a concrete path or the '*'
+     * wildcard). When false the map is unconfigured, so callers should treat
+     * every variant as permitted rather than enforce an empty map.
+     */
+    public function isConfigured(): bool
+    {
+        return $this->paths !== [] || $this->universal !== [];
+    }
+
+    /**
      * Map a variant name to its owning family: a compiled rung `<family>-<width>`
      * or `<family>-x<height>` strips to `<family>`; anything else (a bare family,
      * or a flat variant like `admin-thumb`) is already its own family.
