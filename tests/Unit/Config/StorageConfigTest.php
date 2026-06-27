@@ -257,6 +257,29 @@ final class StorageConfigTest extends TestCase
         self::assertSame([], StorageConfig::variantNamesForBackend($config, 'r2'));
     }
 
+    public function testPrimaryBackendConfigReturnsTheDefaultBackend(): void
+    {
+        $cfg = ['backend' => [
+            'r2' => $this->s3Stub() + [
+                'default'         => true,
+                'public_base_url' => 'https://cdn.example.com',
+                'generate_secret' => 's3cr3t',
+            ],
+        ]];
+
+        $primary = StorageConfig::primaryBackendConfig($cfg);
+
+        self::assertSame('https://cdn.example.com', $primary['public_base_url']);
+        self::assertSame('s3cr3t', $primary['generate_secret']);
+    }
+
+    public function testPrimaryBackendConfigFallsBackToImplicitLocal(): void
+    {
+        $primary = StorageConfig::primaryBackendConfig(['variants' => []]);
+
+        self::assertSame('local', $primary['type']);
+    }
+
     public function testResolverFromArrayBuildsPathVariantResolver(): void
     {
         $resolver = StorageConfig::resolverFromArray([

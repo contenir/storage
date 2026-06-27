@@ -121,6 +121,31 @@ final class StorageConfig
     }
 
     /**
+     * The primary backend's raw config block (the `'default' => true` backend,
+     * else the always-present `local`). Lets front-end factories read backend
+     * settings — `public_base_url`, `generate_secret`, `root_path`, `type` — from
+     * the one place they live, instead of a separate top-level block.
+     *
+     * @param array<string, mixed>|null $config The `storage` config array.
+     *
+     * @return array<string, mixed>
+     */
+    public static function primaryBackendConfig(?array $config): array
+    {
+        $config   = is_array($config) ? $config : [];
+        $declared = is_array($config['backend'] ?? null) ? $config['backend'] : [];
+
+        $backends = $declared;
+        if (! isset($backends[StorageManager::DEFAULT_PROFILE])) {
+            $backends[StorageManager::DEFAULT_PROFILE] = ['type' => 'local'];
+        }
+
+        $primary = self::primaryBackendKey($backends);
+
+        return is_array($backends[$primary] ?? null) ? $backends[$primary] : [];
+    }
+
+    /**
      * The declared variant names assigned to a backend (a variant's own
      * `backend`, else the primary). Lets the CMS asset-index UI/worker list a
      * backend's variants from the config without building a StorageManager.
