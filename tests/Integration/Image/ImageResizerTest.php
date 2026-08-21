@@ -7,14 +7,17 @@ namespace Contenir\Storage\Tests\Integration\Image;
 use Contenir\Storage\Exception\WriteException;
 use Contenir\Storage\Image\ImageResizer;
 use Contenir\Storage\VariantFit;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Exercises ImageResizer against a real ImageMagick binary. Pins down the
- * geometry-string semantics that ImageMagick is sensitive to — in particular,
- * "WxH" with H=0 collapses to a 1x1 image, which is why missing dimensions
- * must be omitted from the geometry string rather than zeroed.
+ * Exercises ImageResizer against both a real ImageMagick binary and the
+ * native `imagick` PHP extension, since production hosts only have the
+ * extension compiled in (no CLI binary) while some local dev setups only
+ * have the CLI. Pins down the geometry semantics both backends are
+ * sensitive to — in particular, resizing with only one dimension given must
+ * still preserve the source aspect ratio.
  */
 #[Group('integration')]
 #[Group('storage')]
@@ -26,9 +29,6 @@ final class ImageResizerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        if (exec('which magick') === '' && exec('which convert') === '') {
-            self::markTestSkipped('ImageMagick (magick/convert) not installed.');
-        }
         $this->rootPath = sys_get_temp_dir() . '/image_resizer_int_' . uniqid('', true);
         mkdir($this->rootPath, 0o777, true);
     }
@@ -39,55 +39,137 @@ final class ImageResizerTest extends TestCase
         parent::tearDown();
     }
 
-    public function testContainResizesProportionallyWhenOnlyWidthIsGiven(): void
+    /**
+     * @return array<string, array{0: bool}>
+     */
+    public static function backendProvider(): array
     {
+        return [
+            'imagick extension' => [true],
+            'CLI binary'        => [false],
+        ];
+    }
+
+    #[DataProvider('backendProvider')]
+    public function testContainResizesProportionallyWhenOnlyWidthIsGiven(bool $useExtension): void
+    {
+        $this->skipUnlessBackendAvailable($useExtension);
         $source = $this->writePngFile('source.png', 800, 600);
         $dest   = $this->rootPath . '/out.png';
 
-        (new ImageResizer())->resize($source, $dest, 400, 0, VariantFit::Contain);
+        $this->makeResizer($useExtension)->resize($source, $dest, 400, 0, VariantFit::Contain);
 
         [$width, $height] = $this->dimensions($dest);
         self::assertSame(400, $width);
         self::assertSame(300, $height);
     }
 
-    public function testContainResizesProportionallyWhenOnlyHeightIsGiven(): void
+    #[DataProvider('backendProvider')]
+    public function testContainResizesProportionallyWhenOnlyHeightIsGiven(bool $useExtension): void
     {
+        $this->skipUnlessBackendAvailable($useExtension);
         $source = $this->writePngFile('source.png', 800, 600);
         $dest   = $this->rootPath . '/out.png';
 
-        (new ImageResizer())->resize($source, $dest, 0, 300, VariantFit::Contain);
+        $this->makeResizer($useExtension)->resize($source, $dest, 0, 300, VariantFit::Contain);
 
         [$width, $height] = $this->dimensions($dest);
         self::assertSame(400, $width);
         self::assertSame(300, $height);
     }
 
-    public function testRejectsZeroForBothDimensions(): void
+    #[DataProvider('backendProvider')]
+    public function testCoverCropsToExactDimensions(bool $useExtension): void
     {
+        $this->skipUnlessBackendAvailable($useExtension);
         $source = $this->writePngFile('source.png', 800, 600);
         $dest   = $this->rootPath . '/out.png';
 
-        $this->expectException(\InvalidArgumentException::class);
-        (new ImageResizer())->resize($source, $dest, 0, 0, VariantFit::Contain);
+        $this->makeResizer($useExtension)->resize($source, $dest, 400, 400, VariantFit::Cover);
+
+        [$width, $height] = $this->dimensions($dest);
+        self::assertSame(400, $width);
+        self::assertSame(400, $height);
     }
 
-    public function testCoverRejectsZeroDimension(): void
+    #[DataProvider('backendProvider')]
+    public function testFillStretchesToExactDimensions(bool $useExtension): void
     {
+        $this->skipUnlessBackendAvailable($useExtension);
         $source = $this->writePngFile('source.png', 800, 600);
         $dest   = $this->rootPath . '/out.png';
 
-        $this->expectException(\InvalidArgumentException::class);
-        (new ImageResizer())->resize($source, $dest, 400, 0, VariantFit::Cover);
+        $this->makeResizer($useExtension)->resize($source, $dest, 200, 500, VariantFit::Fill);
+
+        [$width, $height] = $this->dimensions($dest);
+        self::assertSame(200, $width);
+        self::assertSame(500, $height);
     }
 
-    public function testFillRejectsZeroDimension(): void
+    #[DataProvider('backendProvider')]
+    public function testRejectsZeroForBothDimensions(bool $useExtension): void
     {
+        $this->skipUnlessBackendAvailable($useExtension);
         $source = $this->writePngFile('source.png', 800, 600);
         $dest   = $this->rootPath . '/out.png';
 
         $this->expectException(\InvalidArgumentException::class);
-        (new ImageResizer())->resize($source, $dest, 0, 300, VariantFit::Fill);
+        $this->makeResizer($useExtension)->resize($source, $dest, 0, 0, VariantFit::Contain);
+    }
+
+    #[DataProvider('backendProvider')]
+    public function testCoverRejectsZeroDimension(bool $useExtension): void
+    {
+        $this->skipUnlessBackendAvailable($useExtension);
+        $source = $this->writePngFile('source.png', 800, 600);
+        $dest   = $this->rootPath . '/out.png';
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->makeResizer($useExtension)->resize($source, $dest, 400, 0, VariantFit::Cover);
+    }
+
+    #[DataProvider('backendProvider')]
+    public function testFillRejectsZeroDimension(bool $useExtension): void
+    {
+        $this->skipUnlessBackendAvailable($useExtension);
+        $source = $this->writePngFile('source.png', 800, 600);
+        $dest   = $this->rootPath . '/out.png';
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->makeResizer($useExtension)->resize($source, $dest, 0, 300, VariantFit::Fill);
+    }
+
+    public function testConstructorNeverThrowsRegardlessOfExtensionOrBinaryAvailability(): void
+    {
+        $this->expectNotToPerformAssertions();
+        new ImageResizer();
+        new ImageResizer(useExtension: true);
+        new ImageResizer(useExtension: false);
+    }
+
+    public function testResizeThrowsWhenForcedToCliAndBinaryCannotRun(): void
+    {
+        $source = $this->writePngFile('source.png', 800, 600);
+        $dest   = $this->rootPath . '/out.png';
+
+        $this->expectException(WriteException::class);
+        (new ImageResizer(binaryPath: '/nonexistent/magick', useExtension: false))
+            ->resize($source, $dest, 400, 400, VariantFit::Cover);
+    }
+
+    private function makeResizer(bool $useExtension): ImageResizer
+    {
+        return new ImageResizer(useExtension: $useExtension);
+    }
+
+    private function skipUnlessBackendAvailable(bool $useExtension): void
+    {
+        if ($useExtension && ! extension_loaded('imagick')) {
+            self::markTestSkipped('imagick extension not loaded.');
+        }
+        if (! $useExtension && exec('which magick') === '' && exec('which convert') === '') {
+            self::markTestSkipped('ImageMagick (magick/convert) not installed.');
+        }
     }
 
     private function writePngFile(string $name, int $width, int $height): string

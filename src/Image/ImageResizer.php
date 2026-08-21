@@ -6,33 +6,49 @@ namespace Contenir\Storage\Image;
 
 use Contenir\Storage\Exception\WriteException;
 use Contenir\Storage\VariantFit;
+use Imagick;
+use ImagickException;
+use ImagickPixel;
 
 /**
  * Single-purpose ImageMagick-backed resizer used by storage backends.
  *
- * The legacy PeptoCms\Filter\ImageResize performs a `which magick` shell-out on
- * every filter() call; this implementation discovers the binary once at
- * construction and then only invokes ImageMagick for the actual work.
+ * Prefers the native `imagick` PHP extension when it's loaded AND its
+ * underlying ImageMagick build actually supports the destination format —
+ * `extension_loaded('imagick')` alone doesn't guarantee that, since coders
+ * like AVIF/WEBP (and delegates like SVG) vary by build. Verified per call
+ * via {@see Imagick::queryFormats()} against the real installed formats,
+ * not assumed from extension presence. Falls back to shelling out to a
+ * `magick`/`convert` CLI binary when the extension can't handle the format,
+ * e.g. some local dev setups without the extension at all.
  *
- * Resize semantics map ImageMagick geometry hints to VariantFit:
- *  - Cover   → "WxH^" then -gravity center -extent WxH (fill, crop overflow)
- *  - Contain → "WxH"  (fit inside, preserve aspect)
- *  - Fill    → "WxH!" (stretch, ignore aspect)
+ * Resize semantics map to VariantFit:
+ *  - Cover   → resize to cover, then crop centered to exact dimensions
+ *  - Contain → fit inside the box, preserve aspect
+ *  - Fill    → stretch to exact dimensions, ignore aspect
  */
 class ImageResizer
 {
-    protected string $binaryPath;
+    protected ?string $binaryPath;
+
+    /** @var bool|null Explicit backend override for callers/tests; null defers to per-call format support. */
+    private readonly ?bool $forcedUseExtension;
 
     /**
-     * @param string|null $binaryPath Absolute path to magick/convert. When null,
-     *                                discovered from PATH at construction time.
-     *
-     * @throws WriteException If $binaryPath is null and no ImageMagick
-     *                             binary can be found.
+     * @param string|null $binaryPath   Absolute path to magick/convert, used as
+     *                                  the fallback when the imagick extension
+     *                                  can't handle a given format. When null,
+     *                                  opportunistically discovered from PATH
+     *                                  at construction time (never throws).
+     * @param bool|null   $useExtension Force the native-extension path (true) or
+     *                                  the CLI-binary path (false) for every
+     *                                  call. When null (the default), decided
+     *                                  per call from real format support.
      */
-    public function __construct(?string $binaryPath = null)
+    public function __construct(?string $binaryPath = null, ?bool $useExtension = null)
     {
-        $this->binaryPath = $binaryPath ?? self::discoverBinary();
+        $this->forcedUseExtension = $useExtension;
+        $this->binaryPath         = $binaryPath ?? self::tryDiscoverBinary();
     }
 
     /**
@@ -42,7 +58,8 @@ class ImageResizer
      * $destPath is overwritten.
      *
      * @throws WriteException If the source is unreadable, the destination
-     *                             directory cannot be created/written, or
+     *                             directory cannot be created/written, no
+     *                             backend supports the destination format, or
      *                             ImageMagick fails.
      */
     public function resize(
@@ -56,6 +73,7 @@ class ImageResizer
         if (! is_readable($sourcePath)) {
             throw new WriteException(sprintf('Source image "%s" is not readable.', $sourcePath));
         }
+        $this->assertValidDimensions($width, $height, $fit);
 
         $destDir = \dirname($destPath);
         if (! is_dir($destDir) && ! @mkdir($destDir, 0o777, true) && ! is_dir($destDir)) {
@@ -65,15 +83,115 @@ class ImageResizer
             throw new WriteException(sprintf('Destination directory "%s" is not writable.', $destDir));
         }
 
+        $qualityValue = $quality ?? 85;
+        $format       = strtoupper(pathinfo($destPath, PATHINFO_EXTENSION));
+        $useExtension = $this->forcedUseExtension
+            ?? (extension_loaded('imagick') && self::extensionSupportsFormat($format));
+
+        if ($useExtension) {
+            $this->resizeWithExtension($sourcePath, $destPath, $width, $height, $fit, $qualityValue);
+            return;
+        }
+
+        if ($this->binaryPath === null) {
+            // @codeCoverageIgnoreStart
+            // Only reachable when neither the imagick extension supports the
+            // format nor any magick/convert binary is discoverable on PATH —
+            // every CI/dev machine running this suite has one or the other.
+            throw new WriteException(sprintf(
+                'No ImageMagick backend available for "%s" output: the imagick extension doesn\'t support it '
+                    . 'and no magick/convert CLI binary was found.',
+                $format,
+            ));
+            // @codeCoverageIgnoreEnd
+        }
+
+        $this->resizeWithBinary($sourcePath, $destPath, $width, $height, $fit, $qualityValue);
+    }
+
+    private static function extensionSupportsFormat(string $format): bool
+    {
+        return $format !== '' && in_array($format, (new Imagick())->queryFormats($format), true);
+    }
+
+    /** @throws WriteException */
+    private function resizeWithExtension(
+        string $sourcePath,
+        string $destPath,
+        int $width,
+        int $height,
+        VariantFit $fit,
+        int $quality,
+    ): void {
+        try {
+            $image = new Imagick($sourcePath);
+            $image->setBackgroundColor(new ImagickPixel('transparent'));
+            $image->transformImageColorspace(Imagick::COLORSPACE_SRGB);
+            $image->stripImage();
+
+            match ($fit) {
+                VariantFit::Cover   => $image->cropThumbnailImage($width, $height),
+                VariantFit::Contain => $this->resizeContain($image, $width, $height),
+                VariantFit::Fill    => $image->resizeImage($width, $height, Imagick::FILTER_LANCZOS, 1, false),
+            };
+
+            $image->unsharpMaskImage(0, 0.75, 1, 0.05);
+            $image->setImageCompressionQuality($quality);
+            $image->writeImage($destPath);
+            $image->clear();
+        } catch (ImagickException $e) {
+            throw new WriteException(
+                sprintf('ImageMagick failed resizing "%s" → "%s": %s', $sourcePath, $destPath, $e->getMessage()),
+                previous: $e,
+            );
+        }
+
+        if (! file_exists($destPath)) {
+            throw new WriteException(sprintf('ImageMagick failed resizing "%s" → "%s".', $sourcePath, $destPath));
+        }
+    }
+
+    /**
+     * Imagick::resizeImage() rejects 0 for either dimension, unlike the CLI's
+     * "Wx"/"xH" geometry strings — so when only one dimension is given, the
+     * missing one is derived from the source's own aspect ratio first.
+     */
+    private function resizeContain(Imagick $image, int $width, int $height): void
+    {
+        if ($width > 0 && $height > 0) {
+            $image->resizeImage($width, $height, Imagick::FILTER_LANCZOS, 1, true);
+            return;
+        }
+
+        $sourceWidth  = $image->getImageWidth();
+        $sourceHeight = $image->getImageHeight();
+
+        if ($width > 0) {
+            $height = (int) round($width * $sourceHeight / $sourceWidth);
+        } else {
+            $width = (int) round($height * $sourceWidth / $sourceHeight);
+        }
+
+        $image->resizeImage($width, $height, Imagick::FILTER_LANCZOS, 1, true);
+    }
+
+    /** @throws WriteException */
+    private function resizeWithBinary(
+        string $sourcePath,
+        string $destPath,
+        int $width,
+        int $height,
+        VariantFit $fit,
+        int $quality,
+    ): void {
         // `-background none` preserves alpha for source PNGs/AVIFs; `$quality`
         // is consumed by the encoder driven by $destPath's extension.
-        $qualityValue = $quality ?? 85;
         $command = sprintf(
             '%s %s -background none -colorspace sRGB -strip %s -unsharp 0x0.75 -quality %d %s 2>/dev/null',
-            escapeshellcmd($this->binaryPath),
+            escapeshellcmd((string) $this->binaryPath),
             escapeshellarg($sourcePath),
             $this->geometryArgs($width, $height, $fit),
-            $qualityValue,
+            $quality,
             escapeshellarg($destPath),
         );
 
@@ -91,7 +209,7 @@ class ImageResizer
         }
     }
 
-    private function geometryArgs(int $width, int $height, VariantFit $fit): string
+    private function assertValidDimensions(int $width, int $height, VariantFit $fit): void
     {
         if ($width <= 0 && $height <= 0) {
             throw new \InvalidArgumentException('At least one of width or height must be > 0.');
@@ -103,7 +221,10 @@ class ImageResizer
                 $fit->name,
             ));
         }
+    }
 
+    private function geometryArgs(int $width, int $height, VariantFit $fit): string
+    {
         $geom = match (true) {
             $width > 0 && $height > 0 => sprintf('%dx%d', $width, $height),
             $width > 0                => sprintf('%dx', $width),
@@ -121,8 +242,7 @@ class ImageResizer
         };
     }
 
-    /** @throws WriteException */
-    private static function discoverBinary(): string
+    private static function tryDiscoverBinary(): ?string
     {
         $found = exec('which magick') ?: exec('which convert');
         if (is_string($found) && $found !== '') {
@@ -142,6 +262,6 @@ class ImageResizer
             }
         }
 
-        throw new WriteException('ImageMagick binary (magick or convert) not found.');
+        return null;
     }
 }
