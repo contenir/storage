@@ -22,6 +22,7 @@ use Contenir\Storage\SortField;
 use Contenir\Storage\UploadInput;
 use Contenir\Storage\UploadResolverInterface;
 use Contenir\Storage\Variant;
+use Contenir\Storage\Config\PathVariantResolver;
 use Contenir\Storage\VariantRegistry;
 use SplFileInfo;
 
@@ -51,6 +52,7 @@ final class LocalFilesystem implements StorageInterface
         private readonly VariantRegistry $variants,
         private readonly ImageResizer $resizer,
         ?UploadResolverInterface $resolver = null,
+        private readonly ?PathVariantResolver $paths = null,
     ) {
         $this->resolver = $resolver ?? new DefaultUploadResolver();
     }
@@ -81,7 +83,7 @@ final class LocalFilesystem implements StorageInterface
         $relativePath = $directory === '' ? $finalName : $directory . '/' . $finalName;
 
         if ($resolved->image !== null) {
-            foreach ($this->variants->all() as $variant) {
+            foreach ($this->variants->allowedFor($this->paths, $relativePath) as $variant) {
                 $this->generateVariant($relativePath, $variant);
             }
         }
@@ -315,7 +317,7 @@ final class LocalFilesystem implements StorageInterface
          * source extension.
          */
         $generated = [];
-        foreach ($this->variants->all() as $variant) {
+        foreach ($this->variants->allowedFor($this->paths, $path) as $variant) {
             $variantRel = $this->variantRelativePath($path, $variant->name);
             $variantAbs = $this->resolveAbsolutePath($variantRel);
             if (is_file($variantAbs)) {

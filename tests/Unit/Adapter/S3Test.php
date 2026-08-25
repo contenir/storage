@@ -18,6 +18,7 @@ use Contenir\Storage\Adapter\S3;
 use Contenir\Storage\UploadInput;
 use Contenir\Storage\Variant;
 use Contenir\Storage\VariantFit;
+use Contenir\Storage\Config\PathVariantResolver;
 use Contenir\Storage\VariantRegistry;
 use Contenir\Storage\Image\StubImageResizer;
 use PHPUnit\Framework\Attributes\Group;
@@ -704,13 +705,92 @@ final class S3Test extends TestCase
         $backend->store(new UploadInput($source, 'cat.png', 'image/png'), 'gallery');
         $this->resizer->calls = [];
 
-        // 'card' declares avif/webp, yet the png source-ext fallback is still
-        // generatable on demand for the <img> tag.
-        $url = $backend->generateForKey('gallery/cat__card.png');
-
-        self::assertSame('https://cdn.test/gallery/cat__card.png', $url);
-        self::assertCount(1, $this->resizer->calls);
+        // The source-ext sibling the <img> fallback resolves against is
+        // materialised at store time alongside the declared avif/webp.
         self::assertTrue($fs->fileExists('gallery/cat__card.png'));
+
+        // A format that is neither declared nor the source is still produced
+        // on demand from the original.
+        $url = $backend->generateForKey('gallery/cat__card.jpg');
+
+        self::assertSame('https://cdn.test/gallery/cat__card.jpg', $url);
+        self::assertCount(1, $this->resizer->calls);
+        self::assertTrue($fs->fileExists('gallery/cat__card.jpg'));
+    }
+
+
+    public function testStoreOnlyMaterialisesTheFamiliesThePathOwns(): void
+    {
+        $source  = $this->writePngFile('owned.png', 30, 30);
+        $fs      = new Filesystem(new InMemoryFilesystemAdapter());
+        $backend = new S3(
+            fs:            $fs,
+            publicUrlBase: 'https://cdn.test',
+            variants:      new VariantRegistry(
+                new Variant('tile-480', 480, 480, VariantFit::Contain),
+                new Variant('mark-240', 240, 240, VariantFit::Contain),
+            ),
+            resizer:       $this->resizer,
+            paths:         new PathVariantResolver(['/gallery' => ['tile']]),
+        );
+
+        $backend->store(new UploadInput($source, 'owned.png', 'image/png'), 'gallery');
+
+        self::assertTrue($fs->fileExists('gallery/owned__tile-480.png'));
+        self::assertFalse($fs->fileExists('gallery/owned__mark-240.png'));
+    }
+
+    public function testGenerateForKeyDeclinesAFamilyThePathDoesNotOwn(): void
+    {
+        // The edge miss-proxy must not be a way around the ownership map.
+        $source  = $this->writePngFile('guarded.png', 30, 30);
+        $fs      = new Filesystem(new InMemoryFilesystemAdapter());
+        $backend = new S3(
+            fs:            $fs,
+            publicUrlBase: 'https://cdn.test',
+            variants:      new VariantRegistry(
+                new Variant('tile-480', 480, 480, VariantFit::Contain),
+                new Variant('mark-240', 240, 240, VariantFit::Contain),
+            ),
+            resizer:       $this->resizer,
+            paths:         new PathVariantResolver(['/gallery' => ['tile']]),
+        );
+        $backend->store(new UploadInput($source, 'guarded.png', 'image/png'), 'gallery');
+
+        self::assertNull($backend->generateForKey('gallery/guarded__mark-240.png'));
+        self::assertFalse($fs->fileExists('gallery/guarded__mark-240.png'));
+    }
+
+    public function testDeleteStillRemovesSiblingsOfFamiliesThePathNoLongerOwns(): void
+    {
+        // Cleanup must stay exhaustive: siblings written before an ownership
+        // change would otherwise be stranded in the bucket forever.
+        $source  = $this->writePngFile('stale.png', 30, 30);
+        $fs      = new Filesystem(new InMemoryFilesystemAdapter());
+        $variants = new VariantRegistry(
+            new Variant('tile-480', 480, 480, VariantFit::Contain),
+            new Variant('mark-240', 240, 240, VariantFit::Contain),
+        );
+
+        $permissive = new S3(
+            fs:            $fs,
+            publicUrlBase: 'https://cdn.test',
+            variants:      $variants,
+            resizer:       $this->resizer,
+        );
+        $permissive->store(new UploadInput($source, 'stale.png', 'image/png'), 'gallery');
+        self::assertTrue($fs->fileExists('gallery/stale__mark-240.png'));
+
+        $restricted = new S3(
+            fs:            $fs,
+            publicUrlBase: 'https://cdn.test',
+            variants:      $variants,
+            resizer:       $this->resizer,
+            paths:         new PathVariantResolver(['/gallery' => ['tile']]),
+        );
+        $restricted->delete('gallery/stale.png');
+
+        self::assertFalse($fs->fileExists('gallery/stale__mark-240.png'));
     }
 
     private function backend(?VariantRegistry $variants = null, string $publicUrlBase = 'https://cdn.test'): S3

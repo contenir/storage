@@ -68,6 +68,9 @@ final class StorageConfig
 
         $primary   = self::primaryBackendKey($backends);
         $byBackend = self::variantsByBackend($variants, $primary, $backends);
+        // Ownership is consulted at generation time so an upload only
+        // materialises the families its path owns.
+        $paths     = self::resolverFromArray($config);
 
         $manager = new StorageManager();
         foreach ($backends as $name => $backend) {
@@ -83,6 +86,7 @@ final class StorageConfig
                     new VariantRegistry(...($byBackend[$name] ?? [])),
                     $resizer,
                     $defaultRootPath,
+                    $paths,
                 ),
                 $name === $primary,
             );
@@ -283,12 +287,13 @@ final class StorageConfig
         VariantRegistry $variants,
         ImageResizer $resizer,
         string $defaultRootPath,
+        ?PathVariantResolver $paths = null,
     ): StorageInterface {
         $type = (string) ($backend['type'] ?? 'local');
 
         return match ($type) {
-            'local'             => self::buildLocal($backend, $variants, $resizer, $defaultRootPath),
-            's3'                => self::buildS3($backend, $variants, $resizer),
+            'local'             => self::buildLocal($backend, $variants, $resizer, $defaultRootPath, $paths),
+            's3'                => self::buildS3($backend, $variants, $resizer, $paths),
             'cloudflare-images' => self::buildCloudflareImages($name, $backend, $variants, $resizer),
             default => throw new InvalidArgumentException(sprintf(
                 'Backend "%s" has unknown type "%s" (expected: local, s3, cloudflare-images).',
@@ -310,6 +315,7 @@ final class StorageConfig
         VariantRegistry $variants,
         ImageResizer $resizer,
         string $defaultRootPath,
+        ?PathVariantResolver $paths = null,
     ): LocalFilesystem {
         $root = (string) ($backend['root_path'] ?? '');
 
@@ -318,6 +324,7 @@ final class StorageConfig
             publicPath: (string) ($backend['public_path'] ?? ''),
             variants:   $variants,
             resizer:    $resizer,
+            paths:      $paths,
         );
     }
 
@@ -328,12 +335,14 @@ final class StorageConfig
         array $backend,
         VariantRegistry $variants,
         ImageResizer $resizer,
+        ?PathVariantResolver $paths = null,
     ): S3 {
         return new S3(
             fs:            self::buildFlysystem($backend),
             publicUrlBase: self::requireString($backend, 'publicUrl'),
             variants:      $variants,
             resizer:       $resizer,
+            paths:         $paths,
         );
     }
 

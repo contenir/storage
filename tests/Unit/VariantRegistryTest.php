@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Contenir\Storage\Tests\Unit;
 
+use Contenir\Storage\Config\PathVariantResolver;
 use InvalidArgumentException;
 use Contenir\Storage\Variant;
 use Contenir\Storage\VariantFit;
@@ -62,5 +63,57 @@ final class VariantRegistryTest extends TestCase
         $registry = new VariantRegistry();
 
         self::assertSame([], $registry->all());
+    }
+
+    public function testAllowedForReturnsEveryVariantWhenNoResolverIsGiven(): void
+    {
+        $registry = new VariantRegistry(new Variant('thumb', 100, 100), new Variant('hero', 900, 600));
+
+        self::assertCount(2, $registry->allowedFor(null, '/asset/library/news/lg/x.png'));
+    }
+
+    public function testAllowedForReturnsEveryVariantWhenOwnershipIsUndeclared(): void
+    {
+        // An empty map means nothing is declared, so enforcing it would strip
+        // every variant; the permissive default matches the render-time guard.
+        $registry = new VariantRegistry(new Variant('thumb', 100, 100), new Variant('hero', 900, 600));
+
+        self::assertCount(2, $registry->allowedFor(new PathVariantResolver([]), '/asset/library/news/lg/x.png'));
+    }
+
+    public function testAllowedForKeepsOnlyTheFamiliesThePathOwns(): void
+    {
+        $registry = new VariantRegistry(
+            new Variant('tile-480', 480, 480),
+            new Variant('mark-240', 240, 240),
+            new Variant('admin-thumb', 180, 180),
+        );
+        $paths = new PathVariantResolver([
+            '*'                      => ['admin-thumb'],
+            '/asset/library/news/lg' => ['tile'],
+        ]);
+
+        $names = array_map(
+            static fn (Variant $variant): string => $variant->name,
+            $registry->allowedFor($paths, '/asset/library/news/lg/photo.jpg'),
+        );
+
+        self::assertSame(['tile-480', 'admin-thumb'], $names);
+    }
+
+    public function testAllowedForGivesAnUndeclaredPathOnlyTheUniversalFamilies(): void
+    {
+        $registry = new VariantRegistry(new Variant('tile-480', 480, 480), new Variant('admin-thumb', 180, 180));
+        $paths    = new PathVariantResolver([
+            '*'                      => ['admin-thumb'],
+            '/asset/library/news/lg' => ['tile'],
+        ]);
+
+        $names = array_map(
+            static fn (Variant $variant): string => $variant->name,
+            $registry->allowedFor($paths, '/asset/library/other/photo.jpg'),
+        );
+
+        self::assertSame(['admin-thumb'], $names);
     }
 }

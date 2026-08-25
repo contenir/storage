@@ -30,13 +30,19 @@ final readonly class Variant
     }
 
     /**
-     * Formats to materialise. Falls back to [null] (meaning "use the source's
-     * extension") so callers can iterate uniformly.
+     * Formats to materialise, always including the source extension.
+     *
+     * A null entry means "use the source's extension". It is present in every
+     * case — declared formats are the modern <source> candidates, but the
+     * <img> fallback resolves against the source format, so a variant that
+     * declares ['avif'] must still materialise the source sibling or the
+     * fallback 404s. Declared formats come first so callers taking the first
+     * entry as representative keep getting a modern format.
      *
      * @return array<int, ?string>
      */
     public function targetFormats(): array
     {
-        return $this->formats === [] ? [null] : $this->formats;
+        return $this->formats === [] ? [null] : [...$this->formats, null];
     }
 }

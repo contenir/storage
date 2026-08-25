@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Contenir\Storage;
 
+use Contenir\Storage\Config\PathVariantResolver;
 use InvalidArgumentException;
 
 /**
@@ -42,5 +43,30 @@ final readonly class VariantRegistry
     public function all(): array
     {
         return array_values($this->byName);
+    }
+
+    /**
+     * The variants $path is entitled to, per the `storage.paths` map.
+     *
+     * Generation consults this so an upload only materialises the families its
+     * path actually owns; cleanup (delete/rename) deliberately does not, since
+     * it must account for siblings written before an ownership change.
+     *
+     * An absent or unconfigured resolver means no ownership is declared, so
+     * every variant applies — the same permissive default the render-time
+     * guard uses.
+     *
+     * @return list<Variant>
+     */
+    public function allowedFor(?PathVariantResolver $paths, string $path): array
+    {
+        if ($paths === null || ! $paths->isConfigured()) {
+            return $this->all();
+        }
+
+        return array_values(array_filter(
+            $this->all(),
+            static fn (Variant $variant): bool => $paths->allows($path, $variant->name),
+        ));
     }
 }

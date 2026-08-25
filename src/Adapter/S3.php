@@ -25,6 +25,7 @@ use Contenir\Storage\SortField;
 use Contenir\Storage\UploadInput;
 use Contenir\Storage\UploadResolverInterface;
 use Contenir\Storage\Variant;
+use Contenir\Storage\Config\PathVariantResolver;
 use Contenir\Storage\VariantRegistry;
 
 /**
@@ -88,6 +89,7 @@ final class S3 implements StorageInterface, OnDemandVariantGeneratorInterface
         private readonly VariantRegistry $variants,
         private readonly ImageResizer $resizer,
         ?UploadResolverInterface $resolver = null,
+        private readonly ?PathVariantResolver $paths = null,
     ) {
         $this->resolver = $resolver ?? new DefaultUploadResolver();
     }
@@ -121,7 +123,7 @@ final class S3 implements StorageInterface, OnDemandVariantGeneratorInterface
         }
 
         if ($resolved->image !== null) {
-            foreach ($this->variants->all() as $variant) {
+            foreach ($this->variants->allowedFor($this->paths, $key) as $variant) {
                 $this->generateVariant($upload->sourcePath, $key, $variant);
             }
         }
@@ -368,7 +370,7 @@ final class S3 implements StorageInterface, OnDemandVariantGeneratorInterface
          * disk for an asset that's already fully materialised.
          */
         $missing = [];
-        foreach ($this->variants->all() as $variant) {
+        foreach ($this->variants->allowedFor($this->paths, $path) as $variant) {
             foreach ($variant->targetFormats() as $format) {
                 $variantKey = $this->variantKey($path, $variant->name, $format);
                 if (! $this->keyExists($variantKey)) {
@@ -423,6 +425,16 @@ final class S3 implements StorageInterface, OnDemandVariantGeneratorInterface
 
         $originalKey = $this->resolveOriginalForBase($base);
         if ($originalKey === null) {
+            return null;
+        }
+
+        // Honour the ownership map: the miss-proxy must not materialise a
+        // family the original's path does not own.
+        if (
+            $this->paths !== null
+            && $this->paths->isConfigured()
+            && ! $this->paths->allows($originalKey, $variantName)
+        ) {
             return null;
         }
 
