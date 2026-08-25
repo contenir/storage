@@ -823,6 +823,37 @@ final class S3Test extends TestCase
         self::assertSame([], $backend->missingVariants('gallery/full.png'));
     }
 
+
+    public function testDeleteManyRemovesExactlyTheKeysGiven(): void
+    {
+        // delete() would also sweep every registered variant sibling; a vetted
+        // key list must not trigger that.
+        $fs      = new Filesystem(new InMemoryFilesystemAdapter());
+        $backend = new S3(
+            fs:            $fs,
+            publicUrlBase: 'https://cdn.test',
+            variants:      new VariantRegistry(new Variant('card', 600, 600)),
+            resizer:       $this->resizer,
+        );
+        $fs->write('junk/a.png', 'a');
+        $fs->write('junk/b.png', 'b');
+        $fs->write('keep/c.png', 'c');
+
+        $failed = $backend->deleteMany(['junk/a.png', 'junk/b.png']);
+
+        self::assertSame([], $failed);
+        self::assertFalse($fs->fileExists('junk/a.png'));
+        self::assertFalse($fs->fileExists('junk/b.png'));
+        self::assertTrue($fs->fileExists('keep/c.png'));
+    }
+
+    public function testDeleteManyTreatsAnAbsentKeyAsAlreadySatisfied(): void
+    {
+        $backend = $this->backend();
+
+        self::assertSame([], $backend->deleteMany(['never/existed.png']));
+    }
+
     private function backend(?VariantRegistry $variants = null, string $publicUrlBase = 'https://cdn.test'): S3
     {
         $fs = new Filesystem(new InMemoryFilesystemAdapter());

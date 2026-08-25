@@ -12,6 +12,7 @@ use League\Flysystem\FilesystemOperator;
 use League\Flysystem\StorageAttributes;
 use Contenir\Storage\DefaultUploadResolver;
 use Contenir\Storage\Entry;
+use Contenir\Storage\BulkDeleteInterface;
 use Contenir\Storage\MissingVariantsReporterInterface;
 use Contenir\Storage\StorageInterface;
 use Contenir\Storage\Thumbnail;
@@ -41,7 +42,11 @@ use Contenir\Storage\VariantRegistry;
  * Future optimisation: store width/height in custom object metadata at upload
  * time and resolve via HEAD.
  */
-final class S3 implements StorageInterface, MissingVariantsReporterInterface, OnDemandVariantGeneratorInterface
+final class S3 implements
+    StorageInterface,
+    BulkDeleteInterface,
+    MissingVariantsReporterInterface,
+    OnDemandVariantGeneratorInterface
 {
     use Thumbnail;
 
@@ -386,6 +391,24 @@ final class S3 implements StorageInterface, MissingVariantsReporterInterface, On
         } finally {
             @unlink($sourcePath);
         }
+    }
+
+    public function deleteMany(array $keys): array
+    {
+        $failed = [];
+        foreach ($keys as $key) {
+            $key = $this->normalisePath($key);
+            try {
+                // Flysystem's delete() is idempotent, so an absent key is a
+                // satisfied request rather than something to check for first.
+                $this->fs->delete($key);
+                unset($this->knownKeys[$key]);
+            } catch (FilesystemException $e) {
+                $failed[$key] = $e->getMessage();
+            }
+        }
+
+        return $failed;
     }
 
     public function missingVariants(string $path): array
