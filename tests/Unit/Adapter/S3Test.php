@@ -793,6 +793,36 @@ final class S3Test extends TestCase
         self::assertFalse($fs->fileExists('gallery/stale__mark-240.png'));
     }
 
+
+    public function testMissingVariantsReportsWhatABackfillWouldProduceWithoutWriting(): void
+    {
+        $source  = $this->writePngFile('audit.png', 30, 30);
+        $fs      = new Filesystem(new InMemoryFilesystemAdapter());
+        $backend = new S3(
+            fs:            $fs,
+            publicUrlBase: 'https://cdn.test',
+            variants:      new VariantRegistry(new Variant('card', 600, 600, VariantFit::Contain, ['avif'])),
+            resizer:       $this->resizer,
+        );
+        $fs->write('gallery/audit.png', (string) file_get_contents($source));
+        $this->resizer->calls = [];
+
+        $missing = $backend->missingVariants('gallery/audit.png');
+
+        self::assertSame(['gallery/audit__card.avif', 'gallery/audit__card.png'], $missing);
+        self::assertSame([], $this->resizer->calls);
+        self::assertFalse($fs->fileExists('gallery/audit__card.avif'));
+    }
+
+    public function testMissingVariantsIsEmptyOnceEverythingIsMaterialised(): void
+    {
+        $source  = $this->writePngFile('full.png', 30, 30);
+        $backend = $this->backend(new VariantRegistry(new Variant('card', 600, 600, VariantFit::Contain, ['avif'])));
+        $backend->store(new UploadInput($source, 'full.png', 'image/png'), 'gallery');
+
+        self::assertSame([], $backend->missingVariants('gallery/full.png'));
+    }
+
     private function backend(?VariantRegistry $variants = null, string $publicUrlBase = 'https://cdn.test'): S3
     {
         $fs = new Filesystem(new InMemoryFilesystemAdapter());

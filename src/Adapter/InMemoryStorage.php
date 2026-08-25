@@ -8,6 +8,7 @@ use DateTimeImmutable;
 use InvalidArgumentException;
 use Contenir\Storage\DefaultUploadResolver;
 use Contenir\Storage\Entry;
+use Contenir\Storage\MissingVariantsReporterInterface;
 use Contenir\Storage\StorageInterface;
 use Contenir\Storage\Thumbnail;
 use Contenir\Storage\Exception\NotFoundException;
@@ -29,7 +30,7 @@ use Contenir\Storage\VariantRegistry;
  * can assert on them, but no derived bytes are produced. Real image processing
  * lives in the production backends and is verified by their integration tests.
  */
-final class InMemoryStorage implements StorageInterface
+final class InMemoryStorage implements StorageInterface, MissingVariantsReporterInterface
 {
     use Thumbnail;
 
@@ -227,6 +228,18 @@ final class InMemoryStorage implements StorageInterface
         }
 
         return new ImageMeta($node['width'], $node['height'], $node['mime']);
+    }
+
+    public function missingVariants(string $path): array
+    {
+        // Nothing is materialised here, so nothing is ever reported missing —
+        // but an unknown original must still fail the same way as elsewhere.
+        $path = $this->normalise($path);
+        if (! isset($this->nodes[$path]) || $this->nodes[$path]['isDir']) {
+            throw NotFoundException::forPath($path);
+        }
+
+        return [];
     }
 
     public function regenerateMissingVariants(string $path): array

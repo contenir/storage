@@ -12,6 +12,7 @@ use League\Flysystem\FilesystemOperator;
 use League\Flysystem\StorageAttributes;
 use Contenir\Storage\DefaultUploadResolver;
 use Contenir\Storage\Entry;
+use Contenir\Storage\MissingVariantsReporterInterface;
 use Contenir\Storage\StorageInterface;
 use Contenir\Storage\Thumbnail;
 use Contenir\Storage\Exception\NotFoundException;
@@ -40,7 +41,7 @@ use Contenir\Storage\VariantRegistry;
  * Future optimisation: store width/height in custom object metadata at upload
  * time and resolve via HEAD.
  */
-final class S3 implements StorageInterface, OnDemandVariantGeneratorInterface
+final class S3 implements StorageInterface, MissingVariantsReporterInterface, OnDemandVariantGeneratorInterface
 {
     use Thumbnail;
 
@@ -364,20 +365,9 @@ final class S3 implements StorageInterface, OnDemandVariantGeneratorInterface
             throw NotFoundException::forPath($path);
         }
 
-        /**
-         * Quick pre-pass: figure out which variant-format combinations are
-         * actually missing, so we don't bother spilling the source object to
-         * disk for an asset that's already fully materialised.
-         */
-        $missing = [];
-        foreach ($this->variants->allowedFor($this->paths, $path) as $variant) {
-            foreach ($variant->targetFormats() as $format) {
-                $variantKey = $this->variantKey($path, $variant->name, $format);
-                if (! $this->keyExists($variantKey)) {
-                    $missing[] = ['variant' => $variant, 'format' => $format, 'key' => $variantKey];
-                }
-            }
-        }
+        // Pre-pass, so we don't spill the source object to disk for an asset
+        // that is already fully materialised.
+        $missing = $this->missingVariantEntries($path);
         if ($missing === []) {
             return [];
         }
@@ -396,6 +386,36 @@ final class S3 implements StorageInterface, OnDemandVariantGeneratorInterface
         } finally {
             @unlink($sourcePath);
         }
+    }
+
+    public function missingVariants(string $path): array
+    {
+        $path = $this->normalisePath($path);
+        if (! $this->fs->fileExists($path)) {
+            throw NotFoundException::forPath($path);
+        }
+
+        return array_column($this->missingVariantEntries($path), 'key');
+    }
+
+    /**
+     * Variant/format combinations $path owns but has not materialised.
+     *
+     * @return list<array{variant: Variant, format: ?string, key: string}>
+     */
+    private function missingVariantEntries(string $path): array
+    {
+        $missing = [];
+        foreach ($this->variants->allowedFor($this->paths, $path) as $variant) {
+            foreach ($variant->targetFormats() as $format) {
+                $variantKey = $this->variantKey($path, $variant->name, $format);
+                if (! $this->keyExists($variantKey)) {
+                    $missing[] = ['variant' => $variant, 'format' => $format, 'key' => $variantKey];
+                }
+            }
+        }
+
+        return $missing;
     }
 
     public function generateForKey(string $variantKey): ?string

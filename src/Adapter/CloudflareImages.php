@@ -6,6 +6,7 @@ namespace Contenir\Storage\Adapter;
 
 use InvalidArgumentException;
 use Contenir\Storage\Entry;
+use Contenir\Storage\MissingVariantsReporterInterface;
 use Contenir\Storage\StorageInterface;
 use Contenir\Storage\Thumbnail;
 use Contenir\Storage\ImageMeta;
@@ -33,7 +34,7 @@ use Contenir\Storage\VariantRegistry;
  * Every non-URL method (store/list/exists/delete/rename/imageMeta) delegates
  * to the wrapped backend unchanged.
  */
-final class CloudflareImages implements StorageInterface
+final class CloudflareImages implements StorageInterface, MissingVariantsReporterInterface
 {
     use Thumbnail;
 
@@ -110,6 +111,17 @@ final class CloudflareImages implements StorageInterface
     public function imageMeta(string $path): ImageMeta
     {
         return $this->objectStore->imageMeta($path);
+    }
+
+    public function missingVariants(string $path): array
+    {
+        // URL-transform backend: variants never pre-materialise, so nothing is
+        // outstanding. Delegate an unknown path so it still raises.
+        if (! $this->objectStore->exists($path)) {
+            return $this->objectStore->missingVariants($path); // raises NotFoundException
+        }
+
+        return [];
     }
 
     public function regenerateMissingVariants(string $path): array

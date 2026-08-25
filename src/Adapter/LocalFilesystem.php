@@ -8,6 +8,7 @@ use DateTimeImmutable;
 use DirectoryIterator;
 use InvalidArgumentException;
 use Contenir\Storage\Entry;
+use Contenir\Storage\MissingVariantsReporterInterface;
 use Contenir\Storage\StorageInterface;
 use Contenir\Storage\Thumbnail;
 use Contenir\Storage\Exception\NotFoundException;
@@ -36,7 +37,7 @@ use SplFileInfo;
  * Entry::$id is md5(name) so the JS layer's existing delete/rename
  * payloads continue to round-trip without change.
  */
-final class LocalFilesystem implements StorageInterface
+final class LocalFilesystem implements StorageInterface, MissingVariantsReporterInterface
 {
     use Thumbnail;
 
@@ -298,6 +299,24 @@ final class LocalFilesystem implements StorageInterface
         }
 
         return new ImageMeta($info[0], $info[1], $info['mime'] ?? 'application/octet-stream');
+    }
+
+    public function missingVariants(string $path): array
+    {
+        $path = $this->normalisePath($path);
+        if (! is_file($this->resolveAbsolutePath($path))) {
+            throw NotFoundException::forPath($path);
+        }
+
+        $missing = [];
+        foreach ($this->variants->allowedFor($this->paths, $path) as $variant) {
+            $variantRel = $this->variantRelativePath($path, $variant->name);
+            if (! is_file($this->resolveAbsolutePath($variantRel))) {
+                $missing[] = $variantRel;
+            }
+        }
+
+        return $missing;
     }
 
     public function regenerateMissingVariants(string $path): array
