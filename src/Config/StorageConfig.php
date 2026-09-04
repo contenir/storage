@@ -342,7 +342,7 @@ final class StorageConfig
     ): S3 {
         return new S3(
             fs:            self::buildFlysystem($backend),
-            publicUrlBase: self::requireString($backend, 'publicUrl'),
+            publicUrlBase: self::publicUrlBase($backend),
             variants:      $variants,
             resizer:       $resizer,
             paths:         $paths,
@@ -363,7 +363,7 @@ final class StorageConfig
         // through Cloudflare URL transforms at url() time.
         $inner = new S3(
             fs:            self::buildFlysystem($backend),
-            publicUrlBase: self::requireString($backend, 'publicUrl'),
+            publicUrlBase: self::publicUrlBase($backend),
             variants:      new VariantRegistry(),
             resizer:       $resizer,
         );
@@ -413,6 +413,20 @@ final class StorageConfig
     /**
      * @param array<string, mixed> $config
      */
+    /**
+     * The public base URL of an object-store backend. `publicUrl` is canonical;
+     * `public_base_url` (the key the Laminas asset bridge reads) is accepted as
+     * an alias so a site only has to declare one of them.
+     */
+    private static function publicUrlBase(array $backend): string
+    {
+        $value = $backend['publicUrl'] ?? $backend['public_base_url'] ?? null;
+        if ($value === null || $value === '') {
+            throw new InvalidArgumentException('Missing required config key "publicUrl" (or "public_base_url").');
+        }
+        return (string) $value;
+    }
+
     private static function requireString(array $config, string $key): string
     {
         $value = $config[$key] ?? null;
