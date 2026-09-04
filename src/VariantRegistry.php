@@ -13,10 +13,10 @@ use InvalidArgumentException;
  * The registry is constructed once at boot and injected into backends so they
  * know which variants to materialise (local) or expose (cloud).
  */
-final readonly class VariantRegistry
+final class VariantRegistry
 {
     /** @var array<string, Variant> */
-    private array $byName;
+    private readonly array $byName;
 
     public function __construct(Variant ...$variants)
     {

@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace Contenir\Storage;
 
-final readonly class ImageMeta
+final class ImageMeta
 {
     public function __construct(
-        public int $width,
-        public int $height,
-        public string $mime,
+        public readonly int $width,
+        public readonly int $height,
+        public readonly string $mime,
     ) {
     }
 }

@@ -17,16 +17,16 @@ namespace Contenir\Storage\Config;
  * to create for a key) and render-time validation (whether a requested variant
  * is allowed for a path).
  */
-final readonly class PathVariantResolver
+final class PathVariantResolver
 {
     /** Path key declaring families owned by every path. */
     public const WILDCARD = '*';
 
     /** @var array<string, list<string>> Normalised base path => owned family names. */
-    private array $paths;
+    private readonly array $paths;
 
     /** @var list<string> Families owned by every path (the '*' wildcard entry). */
-    private array $universal;
+    private readonly array $universal;
 
     /**
      * @param array<string, list<string>> $paths Base path => family names it owns.

@@ -16,16 +16,16 @@ namespace Contenir\Storage;
  * behaviour). When multiple formats are declared, the backend generates one
  * sibling object per format and consumers can pick via `<picture>` markup.
  */
-final readonly class Variant
+final class Variant
 {
     /** @param array<int, string> $formats Output extensions without leading dot, e.g. ['avif', 'webp']. */
     public function __construct(
-        public string $name,
-        public int $width,
-        public int $height,
-        public VariantFit $fit = VariantFit::Cover,
-        public array $formats = [],
-        public ?int $quality = null,
+        public readonly string $name,
+        public readonly int $width,
+        public readonly int $height,
+        public readonly VariantFit $fit = VariantFit::Cover,
+        public readonly array $formats = [],
+        public readonly ?int $quality = null,
     ) {
     }
 

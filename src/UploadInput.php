@@ -12,12 +12,12 @@ namespace Contenir\Storage;
  * must already be readable; the backend takes ownership and may move or copy
  * it as required.
  */
-final readonly class UploadInput
+final class UploadInput
 {
     public function __construct(
-        public string $sourcePath,
-        public string $clientFilename,
-        public ?string $clientMime = null,
+        public readonly string $sourcePath,
+        public readonly string $clientFilename,
+        public readonly ?string $clientMime = null,
     ) {
     }
 

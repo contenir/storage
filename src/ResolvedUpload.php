@@ -11,12 +11,12 @@ namespace Contenir\Storage;
  * detecting. Adapters store under $name and persist $mime/$image rather than
  * re-deriving any of it from the client-supplied upload.
  */
-final readonly class ResolvedUpload
+final class ResolvedUpload
 {
     public function __construct(
-        public string $name,
-        public string $mime,
-        public ?ImageMeta $image = null,
+        public readonly string $name,
+        public readonly string $mime,
+        public readonly ?ImageMeta $image = null,
     ) {
     }
 }

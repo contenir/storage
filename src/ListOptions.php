@@ -11,13 +11,13 @@ namespace Contenir\Storage;
  * $includeDirectories defaults to false to match the existing FileBrowser UI,
  * which lists files only.
  */
-final readonly class ListOptions
+final class ListOptions
 {
     public function __construct(
-        public ?string $keyword = null,
-        public SortField $sortField = SortField::Name,
-        public SortDirection $sortDirection = SortDirection::Asc,
-        public bool $includeDirectories = false,
+        public readonly ?string $keyword = null,
+        public readonly SortField $sortField = SortField::Name,
+        public readonly SortDirection $sortDirection = SortDirection::Asc,
+        public readonly bool $includeDirectories = false,
     ) {
     }
 }

@@ -24,17 +24,17 @@ use DateTimeImmutable;
  * it is null for directories, non-images, and entries produced by list() (which
  * does not sniff dimensions). Callers persist it as provenance metadata.
  */
-final readonly class Entry
+final class Entry
 {
     public function __construct(
-        public string $id,
-        public string $name,
-        public string $path,
-        public bool $isDir,
-        public int $size,
-        public DateTimeImmutable $mtime,
-        public string $mime,
-        public ?ImageMeta $image = null,
+        public readonly string $id,
+        public readonly string $name,
+        public readonly string $path,
+        public readonly bool $isDir,
+        public readonly int $size,
+        public readonly DateTimeImmutable $mtime,
+        public readonly string $mime,
+        public readonly ?ImageMeta $image = null,
     ) {
     }
 

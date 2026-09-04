@@ -22,16 +22,16 @@ use InvalidArgumentException;
  * map entry. Expanded variant names are `"<profile>-<width>"` so existing
  * sibling keys are reproduced exactly (no regeneration).
  */
-final readonly class VariantProfile
+final class VariantProfile
 {
     /**
      * @param list<Variant> $variants Expanded, in ladder order.
      */
     private function __construct(
-        public string $name,
-        public string $sizes,
-        public bool $isPreview,
-        public array $variants,
+        public readonly string $name,
+        public readonly string $sizes,
+        public readonly bool $isPreview,
+        public readonly array $variants,
     ) {
     }
 
