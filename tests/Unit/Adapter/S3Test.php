@@ -111,6 +111,21 @@ final class S3Test extends TestCase
         self::assertNotNull($backend->url($entry->path, 'admin-thumb'));
     }
 
+    public function testStoreSkipsVariantsForImagesWhenAutoGenerateIsOn(): void
+    {
+        $source  = $this->writePngFile('cat.png', 30, 30);
+        $backend = $this->backend(
+            new VariantRegistry(new Variant('admin-thumb', 180, 180, VariantFit::Contain)),
+            autoGenerate: true,
+        );
+
+        $entry = $backend->store(new UploadInput($source, 'cat.png', 'image/png'), 'gallery');
+
+        self::assertSame([], $this->resizer->calls);
+        self::assertSame('gallery/cat.png', $entry->path);
+        self::assertNull($backend->url($entry->path, 'admin-thumb'));
+    }
+
     public function testStoreSkipsVariantsForNonImages(): void
     {
         $source  = $this->writeTempFile('notes.txt', 'data');
@@ -854,14 +869,18 @@ final class S3Test extends TestCase
         self::assertSame([], $backend->deleteMany(['never/existed.png']));
     }
 
-    private function backend(?VariantRegistry $variants = null, string $publicUrlBase = 'https://cdn.test'): S3
-    {
+    private function backend(
+        ?VariantRegistry $variants = null,
+        string $publicUrlBase = 'https://cdn.test',
+        bool $autoGenerate = false,
+    ): S3 {
         $fs = new Filesystem(new InMemoryFilesystemAdapter());
         return new S3(
             fs:            $fs,
             publicUrlBase: $publicUrlBase,
             variants:      $variants ?? new VariantRegistry(),
             resizer:       $this->resizer,
+            autoGenerate:  $autoGenerate,
         );
     }
 

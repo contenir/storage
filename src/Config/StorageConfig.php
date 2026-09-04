@@ -30,6 +30,9 @@ use Contenir\Storage\VariantRegistry;
  *     // primary; add 'default' => true to promote it.
  *     'backend' => [
  *       'r2' => ['type' => 's3', 'default' => true, 'bucket' => '…', 'endpoint' => '…', 'key' => '…', 'secret' => '…'],
+ *       // 'auto_generate' => true on an s3 backend skips variant generation at
+ *       // upload; an edge worker in front of the bucket materialises variants
+ *       // on demand through OnDemandVariantGeneratorInterface instead.
  *       // 'local' => ['type' => 'local', 'root_path' => '/abs/override'],  // only to override the pre-wired root
  *     ],
  *     // WHAT transforms exist. Flat; each MAY pin a 'backend' (default = primary).
@@ -343,6 +346,7 @@ final class StorageConfig
             variants:      $variants,
             resizer:       $resizer,
             paths:         $paths,
+            autoGenerate:  (bool) ($backend['auto_generate'] ?? false),
         );
     }
 

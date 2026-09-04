@@ -96,6 +96,7 @@ final class S3 implements
         private readonly ImageResizer $resizer,
         ?UploadResolverInterface $resolver = null,
         private readonly ?PathVariantResolver $paths = null,
+        private readonly bool $autoGenerate = false,
     ) {
         $this->resolver = $resolver ?? new DefaultUploadResolver();
     }
@@ -128,7 +129,12 @@ final class S3 implements
             }
         }
 
-        if ($resolved->image !== null) {
+        /**
+         * With autoGenerate the edge (e.g. the c-d.media Worker) materialises
+         * variants lazily on first request via regenerateMissingVariants(), so
+         * the upload request stores only the original and returns immediately.
+         */
+        if ($resolved->image !== null && ! $this->autoGenerate) {
             foreach ($this->variants->allowedFor($this->paths, $key) as $variant) {
                 $this->generateVariant($upload->sourcePath, $key, $variant);
             }
